@@ -12,14 +12,21 @@ class OllamaProvider(LLMProvider):
         self.model = model
         self.base_url = base_url
 
-    def generate(self, prompt: str, system: str | None = None) -> tuple[str, TokenUsage]:
+    def generate(
+        self,
+        prompt: str,
+        system: str | None = None,
+        *,
+        cached_prefix: str | None = None,
+    ) -> tuple[str, TokenUsage]:
         from openai import OpenAI
 
         client = OpenAI(base_url=self.base_url, api_key="ollama")
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
+        full_prompt = f"{cached_prefix}\n\n{prompt}" if cached_prefix else prompt
+        messages.append({"role": "user", "content": full_prompt})
 
         resp = client.chat.completions.create(
             model=self.model,

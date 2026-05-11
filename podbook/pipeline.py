@@ -24,6 +24,7 @@ def run_pipeline(
     force_transcribe: bool = False,
     cleanup: bool = False,
     enrich: bool = False,
+    glossary: bool = False,
     provider: str = "ollama",
     model: str | None = None,
     fraction: float | None = None,
@@ -140,6 +141,7 @@ def run_pipeline(
     chapters = None
     takeaways = None
     summary = None
+    glossary_data: dict[str, str] | None = None
     cleaned_segments = None
 
     if cleanup and llm is not None:
@@ -197,6 +199,18 @@ def run_pipeline(
                     f"  [green]✓[/] Summary "
                     f"({usage.input_tokens:,} in / {usage.output_tokens:,} out)"
                 )
+                hit_cap = max_tokens and token_spent >= max_tokens
+
+            if glossary and not hit_cap:
+                console.print("  [bold]Pass 2e:[/] Generating glossary...")
+                from podbook.ai.summarize import generate_glossary
+
+                glossary_data, usage = generate_glossary(source_transcript, llm)
+                token_spent += usage.total
+                console.print(
+                    f"  [green]✓[/] {len(glossary_data)} glossary terms "
+                    f"({usage.input_tokens:,} in / {usage.output_tokens:,} out)"
+                )
 
         if token_spent > 0:
             console.print(f"  [bold]Total tokens spent:[/] {token_spent:,}")
@@ -214,6 +228,7 @@ def run_pipeline(
         chapters=chapters,
         key_takeaways=takeaways,
         final_summary=summary,
+        glossary=glossary_data,
     )
     md_path = output_dir / f"{_slugify(transcript.source_title or 'transcript')}.md"
     md_path.write_text(md_text)
@@ -486,6 +501,22 @@ def _transcribe_audio(audio_path: Path, transcript: Transcript) -> Transcript:
     return transcript.model_copy(update={"segments": segments})
 
 
+def extract_transcript(
+    *,
+    source: str,
+    source_type: SourceType,
+    cache_dir: Path,
+    force_transcribe: bool = False,
+) -> Transcript:
+    """Public entry point for transcript extraction (used by the transcript CLI command)."""
+    return _extract_transcript(
+        source=source,
+        source_type=source_type,
+        cache_dir=cache_dir,
+        force_transcribe=force_transcribe,
+    )
+
+
 def _get_provider(provider: str, model: str | None):
     """Create an LLM provider instance."""
     if provider == "openai":
@@ -498,7 +529,22 @@ def _get_provider(provider: str, model: str | None):
 
         return OllamaProvider(model=model or "llama3.2")
 
-    raise ValueError(f"Unknown provider: {provider}")
+    if provider == "claude":
+        from podbook.ai.providers.anthropic import ClaudeProvider
+
+        return ClaudeProvider(model=model or "claude-haiku-4-5-20251001")
+
+    if provider == "deepseek":
+        from podbook.ai.providers.openai import OpenAIProvider
+        import os
+
+        return OpenAIProvider(
+            model=model or "deepseek-chat",
+            api_key=os.environ.get("DEEPSEEK_API_KEY"),
+            base_url="https://api.deepseek.com/v1",
+        )
+
+    raise ValueError(f"Unknown provider: {provider!r}. Use: ollama, openai, claude, deepseek")
 
 
 # ═══════════════════════════════════════════════════════════════════

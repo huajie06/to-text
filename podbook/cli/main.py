@@ -7,7 +7,6 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
-from rich.progress import Progress
 
 from podbook.models import SourceType
 
@@ -16,8 +15,12 @@ app = typer.Typer(
     help="Convert podcasts and videos into readable ebooks.",
     no_args_is_help=True,
 )
+cache_app = typer.Typer(help="Manage the PodBook cache.")
+app.add_typer(cache_app, name="cache")
 
 console = Console()
+
+_PROVIDERS = "ollama, openai, claude, deepseek"
 
 
 @app.command()
@@ -28,59 +31,39 @@ def build(
     ],
     output: Annotated[
         Path | None,
-        typer.Option(
-            "--output", "-o",
-            help="Output directory for generated files.",
-        ),
+        typer.Option("--output", "-o", help="Output directory for generated files."),
     ] = None,
     max_tokens: Annotated[
         int | None,
-        typer.Option(
-            "--max-tokens",
-            help="Hard limit on LLM token usage for this run.",
-        ),
+        typer.Option("--max-tokens", help="Hard limit on LLM token usage for this run."),
     ] = None,
     dry_run: Annotated[
         bool,
-        typer.Option(
-            "--dry-run",
-            help="Estimate costs without making LLM calls.",
-        ),
+        typer.Option("--dry-run", help="Estimate costs without making LLM calls."),
     ] = False,
     force_transcribe: Annotated[
         bool,
-        typer.Option(
-            "--force-transcribe",
-            help="Skip subtitle check, always transcribe locally.",
-        ),
+        typer.Option("--force-transcribe", help="Skip subtitle check, always transcribe locally."),
     ] = False,
     cleanup: Annotated[
         bool,
-        typer.Option(
-            "--cleanup",
-            help="Run LLM cleanup pass on the transcript.",
-        ),
+        typer.Option("--cleanup", help="Run LLM cleanup pass on the transcript."),
     ] = False,
     enrich: Annotated[
         bool,
-        typer.Option(
-            "--enrich",
-            help="Run LLM enrichment (chapters, takeaways, summary).",
-        ),
+        typer.Option("--enrich", help="Run LLM enrichment (chapters, takeaways, summary)."),
+    ] = False,
+    glossary: Annotated[
+        bool,
+        typer.Option("--glossary", help="Generate a glossary of key terms (requires --enrich)."),
     ] = False,
     provider: Annotated[
         str,
-        typer.Option(
-            "--provider",
-            help="LLM provider: openai, ollama.",
-        ),
+        typer.Option("--provider", help=f"LLM provider: {_PROVIDERS}."),
     ] = "ollama",
     model: Annotated[
         str | None,
-        typer.Option(
-            "--model",
-            help="Model name override (e.g. gpt-4o-mini, llama3.2).",
-        ),
+        typer.Option("--model", help="Model name override (e.g. gpt-4o-mini, claude-haiku-4-5-20251001)."),
     ] = None,
     fraction: Annotated[
         float | None,
@@ -95,21 +78,21 @@ def build(
     """Build an ebook from a podcast URL or local audio/video file."""
     from podbook.pipeline import run_pipeline
 
-    src = _detect_source(source)
-    console.print(f"[bold]Source:[/] {src}")
-    console.print(f"[bold]Type:[/] {_detect_source_type(source).value}")
+    src_type = _detect_source_type(source)
+    console.print(f"[bold]Source:[/] {_source_label(src_type)}")
     if fraction is not None:
         console.print(f"[bold]Fraction:[/] {fraction:.1%}")
 
     run_pipeline(
         source=source,
-        source_type=_detect_source_type(source),
+        source_type=src_type,
         output_dir=output,
         max_tokens=max_tokens,
         dry_run=dry_run,
         force_transcribe=force_transcribe,
         cleanup=cleanup,
         enrich=enrich,
+        glossary=glossary,
         provider=provider,
         model=model,
         fraction=fraction,
@@ -124,21 +107,38 @@ def transcript(
     ],
     output: Annotated[
         Path | None,
-        typer.Option(
-            "--output", "-o",
-            help="Output path for the transcript JSON.",
-        ),
+        typer.Option("--output", "-o", help="Output path for the transcript JSON."),
     ] = None,
     force_transcribe: Annotated[
         bool,
-        typer.Option(
-            "--force-transcribe",
-            help="Skip subtitle check, always transcribe locally.",
-        ),
+        typer.Option("--force-transcribe", help="Skip subtitle check, always transcribe locally."),
     ] = False,
 ) -> None:
-    """Generate a transcript from a podcast source and save as JSON."""
-    console.print("[bold]Transcript generation[/]")
+    """Extract a transcript and save it as JSON (no EPUB generated)."""
+    from podbook.pipeline import extract_transcript
+
+    src_type = _detect_source_type(source)
+    console.print(f"[bold]Extracting transcript from:[/] {_source_label(src_type)}")
+
+    output_dir = output.parent if output and output.suffix else (output or Path("output"))
+    cache_dir = output_dir / ".cache"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    tr = extract_transcript(
+        source=source,
+        source_type=src_type,
+        cache_dir=cache_dir,
+        force_transcribe=force_transcribe,
+    )
+
+    if not tr.segments:
+        console.print("[bold red]Error:[/] No segments produced.")
+        raise typer.Exit(1)
+
+    out_path = output or output_dir / f"{_slugify(tr.source_title or 'transcript')}.transcript.json"
+    out_path.write_text(tr.model_dump_json(indent=2))
+    console.print(f"[green]✓[/] {len(tr.segments)} segments → {out_path}")
 
 
 @app.command()
@@ -148,57 +148,188 @@ def epub(
         typer.Argument(
             exists=True,
             dir_okay=False,
-            help="Path to a transcript JSON or markdown file.",
+            help="Path to a transcript JSON file.",
         ),
     ],
     output: Annotated[
         Path | None,
-        typer.Option(
-            "--output", "-o",
-            help="Output path for the EPUB file.",
-        ),
+        typer.Option("--output", "-o", help="Output path for the EPUB file."),
     ] = None,
 ) -> None:
-    """Generate an EPUB from an existing transcript file."""
-    console.print(f"[bold]EPUB generation from:[/] {transcript_path}")
+    """Generate an EPUB directly from an existing transcript JSON."""
+    from podbook.ebook.epub import generate_epub
+    from podbook.ebook.markdown import generate_markdown
+    from podbook.models import EbookConfig, Transcript
+
+    console.print(f"[bold]Generating EPUB from:[/] {transcript_path}")
+
+    try:
+        tr = Transcript.model_validate_json(transcript_path.read_text())
+    except Exception as exc:
+        console.print(f"[bold red]Error:[/] Could not parse transcript: {exc}")
+        raise typer.Exit(1)
+
+    md_text = generate_markdown(tr)
+    out_path = output or transcript_path.with_suffix(".epub")
+    generate_epub(
+        md_text,
+        out_path,
+        EbookConfig(
+            title=tr.source_title or "Untitled",
+            author=tr.channel or "PodBook",
+            language=tr.language or "en",
+        ),
+    )
+    console.print(f"[green]✓[/] EPUB written to {out_path}")
 
 
-def _detect_source(source: str) -> str:
-    """Detect and return a human-readable source label."""
-    st = _detect_source_type(source)
-    labels = {
-        SourceType.YOUTUBE: "YouTube",
-        SourceType.PODCAST_PAGE: "Podcast Page",
-        SourceType.RSS: "RSS Feed",
-        SourceType.LOCAL_AUDIO: "Local Audio File",
-        SourceType.LOCAL_VIDEO: "Local Video File",
+# ── Cache subcommands ──────────────────────────────────────────────
+
+@cache_app.command("list")
+def cache_list(
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", "-d", help="Output directory to inspect."),
+    ] = Path("output"),
+) -> None:
+    """List all cached artifacts in the output directory."""
+    from rich.table import Table
+
+    cache_dir = output_dir / ".cache"
+    if not cache_dir.exists():
+        console.print("[yellow]No cache directory found.[/]")
+        raise typer.Exit(0)
+
+    table = Table(title=f"Cache: {cache_dir}")
+    table.add_column("Type", style="dim")
+    table.add_column("File")
+    table.add_column("Size")
+
+    patterns = [
+        ("Transcript JSON", "*.transcript.json"),
+        ("Audio (WAV)", "*.wav"),
+        ("Audio (MP3)", "*.mp3"),
+        ("Subtitles", "*.json3"),
+        ("Subtitles (SRT)", "*.srt"),
+        ("Subtitles (VTT)", "*.vtt"),
+    ]
+
+    any_found = False
+    for label, pattern in patterns:
+        for f in sorted(cache_dir.glob(pattern)):
+            size = f.stat().st_size
+            table.add_row(label, f.name, _human_size(size))
+            any_found = True
+
+    for f in sorted(output_dir.glob("*.md")):
+        table.add_row("Markdown", f.name, _human_size(f.stat().st_size))
+        any_found = True
+
+    for f in sorted(output_dir.glob("*.epub")):
+        table.add_row("EPUB", f.name, _human_size(f.stat().st_size))
+        any_found = True
+
+    if any_found:
+        console.print(table)
+    else:
+        console.print("[dim]Cache is empty.[/]")
+
+
+@cache_app.command("clear")
+def cache_clear(
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", "-d", help="Output directory to clear."),
+    ] = Path("output"),
+    type_: Annotated[
+        str | None,
+        typer.Option("--type", "-t", help="Only clear this type: audio, transcript, subtitle, all."),
+    ] = None,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", "-y", help="Skip confirmation prompt."),
+    ] = False,
+) -> None:
+    """Clear cached artifacts from the output directory."""
+    cache_dir = output_dir / ".cache"
+    if not cache_dir.exists():
+        console.print("[yellow]No cache directory found.[/]")
+        raise typer.Exit(0)
+
+    type_patterns: dict[str, list[str]] = {
+        "audio": ["*.wav", "*.mp3", "*.m4a"],
+        "transcript": ["*.transcript.json"],
+        "subtitle": ["*.json3", "*.srt", "*.vtt"],
     }
-    return labels[st]
 
+    selected = type_ or "all"
+    if selected == "all":
+        patterns = [p for ps in type_patterns.values() for p in ps]
+    elif selected in type_patterns:
+        patterns = type_patterns[selected]
+    else:
+        console.print(f"[red]Unknown type '{selected}'. Use: audio, transcript, subtitle, all[/]")
+        raise typer.Exit(1)
+
+    targets = [f for pat in patterns for f in cache_dir.glob(pat)]
+    if not targets:
+        console.print("[dim]Nothing to clear.[/]")
+        raise typer.Exit(0)
+
+    console.print(f"Will delete {len(targets)} file(s):")
+    for f in targets:
+        console.print(f"  [dim]{f}[/]")
+
+    if not yes:
+        typer.confirm("Proceed?", abort=True)
+
+    for f in targets:
+        f.unlink()
+    console.print(f"[green]✓[/] Cleared {len(targets)} file(s).")
+
+
+# ── Helpers ───────────────────────────────────────────────────────
 
 def _detect_source_type(source: str) -> SourceType:
-    """Detect the source type from a URL or file path."""
     s = source.strip()
-
-    # Local files
     if s.startswith(".") or s.startswith("/") or s.startswith("~"):
         path = Path(s)
         if path.suffix.lower() in (".mp3", ".wav", ".m4a", ".opus", ".ogg", ".flac"):
             return SourceType.LOCAL_AUDIO
         if path.suffix.lower() in (".mp4", ".mkv", ".webm", ".mov"):
             return SourceType.LOCAL_VIDEO
-        return SourceType.LOCAL_AUDIO  # best guess
-
-    # YouTube
+        return SourceType.LOCAL_AUDIO
     if "youtube.com" in s or "youtu.be" in s:
         return SourceType.YOUTUBE
-
-    # RSS
     if s.lower().endswith((".xml", ".rss")) or "/feed" in s.lower() or "/rss" in s.lower():
         return SourceType.RSS
-
-    # Default: podcast webpage
     return SourceType.PODCAST_PAGE
+
+
+def _source_label(src_type: SourceType) -> str:
+    return {
+        SourceType.YOUTUBE: "YouTube",
+        SourceType.PODCAST_PAGE: "Podcast Page",
+        SourceType.RSS: "RSS Feed",
+        SourceType.LOCAL_AUDIO: "Local Audio File",
+        SourceType.LOCAL_VIDEO: "Local Video File",
+    }[src_type]
+
+
+def _slugify(text: str) -> str:
+    import re
+    text = text.lower().strip()
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[-\s]+", "-", text)
+    return text[:100]
+
+
+def _human_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.0f} {unit}"
+        n //= 1024
+    return f"{n:.0f} TB"
 
 
 if __name__ == "__main__":

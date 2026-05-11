@@ -20,14 +20,21 @@ class OpenAIProvider(LLMProvider):
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self.base_url = base_url
 
-    def generate(self, prompt: str, system: str | None = None) -> tuple[str, TokenUsage]:
+    def generate(
+        self,
+        prompt: str,
+        system: str | None = None,
+        *,
+        cached_prefix: str | None = None,
+    ) -> tuple[str, TokenUsage]:
         from openai import OpenAI
 
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
+        full_prompt = f"{cached_prefix}\n\n{prompt}" if cached_prefix else prompt
+        messages.append({"role": "user", "content": full_prompt})
 
         resp = client.chat.completions.create(model=self.model, messages=messages)
         content = resp.choices[0].message.content or ""

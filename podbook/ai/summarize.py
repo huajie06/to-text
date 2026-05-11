@@ -22,15 +22,7 @@ TOPICS: <comma-separated topics>
 
 Only output the chapter list. No preamble."""
 
-CHAPTER_USER = """Identify the major chapter breaks in this podcast transcript.
-
-Context:
-{context}
-
-Transcript:
----
-{transcript_text}
----"""
+CHAPTER_SUFFIX = "Identify the major chapter breaks in this transcript chunk."
 
 TAKEAWAY_SYSTEM = """You extract concise, memorable key takeaways from podcast transcripts.
 
@@ -43,15 +35,7 @@ Rules:
 
 Output one takeaway per line, starting with a dash."""
 
-TAKEAWAY_USER = """Extract the key takeaways from this transcript.
-
-Context:
-{context}
-
-Transcript:
----
-{transcript_text}
----"""
+TAKEAWAY_SUFFIX = "Extract the key takeaways from this transcript."
 
 SUMMARY_SYSTEM = """You write concise, informative summaries of podcast episodes.
 
@@ -63,15 +47,7 @@ Write a 3-4 paragraph summary that:
 
 Write in clear, journalistic prose. No preamble."""
 
-SUMMARY_USER = """Summarize this podcast episode.
-
-Context:
-{context}
-
-Transcript:
----
-{transcript_text}
----"""
+SUMMARY_SUFFIX = "Summarize this podcast episode."
 
 GLOSSARY_SYSTEM = """You extract key terms, concepts, and acronyms from podcast transcripts and write brief definitions based on how they are used in context.
 
@@ -84,15 +60,13 @@ Include:
 - People mentioned with significant roles
 - Companies or products discussed"""
 
-GLOSSARY_USER = """Extract key terms and concepts from this transcript that would benefit from glossary entries.
+GLOSSARY_SUFFIX = "Extract key terms and concepts from this transcript that would benefit from glossary entries."
 
-Context:
-{context}
 
-Transcript:
----
-{transcript_text}
----"""
+def _transcript_prefix(transcript: Transcript, context: str) -> str:
+    """Build the stable cached prefix: context + full transcript text."""
+    transcript_text = "\n\n".join(seg.text for seg in transcript.segments)
+    return f"Context:\n{context}\n\nTranscript:\n---\n{transcript_text}\n---"
 
 
 def generate_chapters(
@@ -102,14 +76,12 @@ def generate_chapters(
 ) -> tuple[list[Chapter], TokenUsage]:
     """Generate chapter titles from a transcript.
 
-    Processes transcript in large chunks (200+ segments each) to
-    identify topic shifts, then returns a list of Chapters.
+    Processes transcript in large chunks to identify topic shifts.
     """
     context = build_context(transcript)
     total_usage = TokenUsage()
     all_chapters: list[Chapter] = []
 
-    # Use large chunks for chapter detection
     chunks = chunk_by_segments(
         transcript.segments,
         target_segments=segments_per_chunk,
@@ -118,12 +90,17 @@ def generate_chapters(
 
     for chunk in chunks:
         chunk_text = "\n\n".join(seg.text for seg in chunk)
+        cached_prefix = f"Context:\n{context}\n\nTranscript chunk:\n---\n{chunk_text}\n---"
+
         text, usage = provider.generate(
-            CHAPTER_USER.format(context=context, transcript_text=chunk_text),
+            CHAPTER_SUFFIX,
             system=CHAPTER_SYSTEM,
+            cached_prefix=cached_prefix,
         )
         total_usage.input_tokens += usage.input_tokens
         total_usage.output_tokens += usage.output_tokens
+        total_usage.cache_write_tokens += usage.cache_write_tokens
+        total_usage.cache_read_tokens += usage.cache_read_tokens
 
         for line in text.strip().split("\n"):
             if line.startswith("CHAPTER:"):
@@ -137,17 +114,14 @@ def generate_takeaways(
     transcript: Transcript,
     provider: LLMProvider,
 ) -> tuple[list[str], TokenUsage]:
-    """Generate key takeaways from the full transcript.
-
-    Sends the entire transcript in one call — assumes it fits in context
-    or the model has sufficient context window (most modern models do).
-    """
+    """Generate key takeaways from the full transcript."""
     context = build_context(transcript)
-    transcript_text = "\n\n".join(seg.text for seg in transcript.segments)
+    cached_prefix = _transcript_prefix(transcript, context)
 
     text, usage = provider.generate(
-        TAKEAWAY_USER.format(context=context, transcript_text=transcript_text),
+        TAKEAWAY_SUFFIX,
         system=TAKEAWAY_SYSTEM,
+        cached_prefix=cached_prefix,
     )
 
     takeaways = [
@@ -164,11 +138,12 @@ def generate_summary(
 ) -> tuple[str, TokenUsage]:
     """Generate a final summary of the episode."""
     context = build_context(transcript)
-    transcript_text = "\n\n".join(seg.text for seg in transcript.segments)
+    cached_prefix = _transcript_prefix(transcript, context)
 
     text, usage = provider.generate(
-        SUMMARY_USER.format(context=context, transcript_text=transcript_text),
+        SUMMARY_SUFFIX,
         system=SUMMARY_SYSTEM,
+        cached_prefix=cached_prefix,
     )
     return text.strip(), usage
 
@@ -179,11 +154,12 @@ def generate_glossary(
 ) -> tuple[dict[str, str], TokenUsage]:
     """Generate a glossary of key terms from the transcript."""
     context = build_context(transcript)
-    transcript_text = "\n\n".join(seg.text for seg in transcript.segments)
+    cached_prefix = _transcript_prefix(transcript, context)
 
     text, usage = provider.generate(
-        GLOSSARY_USER.format(context=context, transcript_text=transcript_text),
+        GLOSSARY_SUFFIX,
         system=GLOSSARY_SYSTEM,
+        cached_prefix=cached_prefix,
     )
 
     glossary: dict[str, str] = {}

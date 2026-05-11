@@ -12,6 +12,7 @@ def generate_markdown(
     chapters: list[Chapter] | None = None,
     key_takeaways: list[str] | None = None,
     final_summary: str | None = None,
+    glossary: dict[str, str] | None = None,
 ) -> str:
     """Generate a full markdown document from a transcript and enrichments."""
     lines: list[str] = []
@@ -93,6 +94,14 @@ def generate_markdown(
         lines.append("")
         lines.append(final_summary)
         lines.append("")
+
+    # Glossary
+    if glossary:
+        lines.append("# Glossary")
+        lines.append("")
+        for term, definition in sorted(glossary.items()):
+            lines.append(f"**{term}**: {definition}")
+            lines.append("")
 
     return "\n".join(lines)
 

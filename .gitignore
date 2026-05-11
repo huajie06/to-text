@@ -7,13 +7,19 @@ __pycache__/
 dist/
 build/
 
-# PodBook
-podbook_cache/
+# PodBook — pipeline outputs and cached media
 output/
 *.wav
 *.mp3
 *.m4a
 *.opus
+*.epub
+*.srt
+*.vtt
+*.json3
+
+# Secrets
+.env
 
 # IDE
 .idea/

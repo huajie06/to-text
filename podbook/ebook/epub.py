@@ -99,69 +99,7 @@ def _extract_title(md_text: str) -> str | None:
 
 
 def _markdown_to_html_body(md_text: str) -> str:
-    """Convert markdown to HTML body content (basic, no external dep)."""
-    import re
+    """Convert markdown to HTML body content using the markdown library."""
+    import markdown as md_lib
 
-    html_lines: list[str] = []
-    in_paragraph = False
-
-    for line in md_text.split("\n"):
-        stripped = line.strip()
-
-        # Headings
-        if stripped.startswith("###### "):
-            html_lines.append(f"<h6>{stripped[7:]}</h6>")
-            continue
-        if stripped.startswith("##### "):
-            html_lines.append(f"<h5>{stripped[6:]}</h5>")
-            continue
-        if stripped.startswith("#### "):
-            html_lines.append(f"<h4>{stripped[5:]}</h4>")
-            continue
-        if stripped.startswith("### "):
-            html_lines.append(f"<h3>{stripped[4:]}</h3>")
-            continue
-        if stripped.startswith("## "):
-            html_lines.append(f"<h2>{stripped[3:]}</h2>")
-            continue
-        if stripped.startswith("# "):
-            html_lines.append(f"<h1>{stripped[2:]}</h1>")
-            continue
-
-        # Lists
-        if stripped.startswith("- "):
-            if in_paragraph:
-                html_lines.append("</p>")
-                in_paragraph = False
-            html_lines.append(f"<li>{_inline_markdown(stripped[2:])}</li>")
-            continue
-
-        # Bold inline (handled later for full paragraphs)
-        # Empty line = paragraph break
-        if not stripped:
-            if in_paragraph:
-                html_lines.append("</p>")
-                in_paragraph = False
-            continue
-
-        # Regular paragraph
-        if not in_paragraph:
-            html_lines.append("<p>")
-            in_paragraph = True
-        else:
-            html_lines.append("<br/>")
-        html_lines.append(_inline_markdown(stripped))
-
-    if in_paragraph:
-        html_lines.append("</p>")
-
-    return "\n".join(html_lines)
-
-
-def _inline_markdown(text: str) -> str:
-    """Convert inline markdown (**bold**, *italic*) to HTML."""
-    import re
-
-    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
-    text = re.sub(r"\*(.+?)\*", r"<em>\1</em>", text)
-    return text
+    return md_lib.markdown(md_text, extensions=["extra", "nl2br"])

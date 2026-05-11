@@ -22,7 +22,8 @@ Rules:
 
 Output the cleaned transcript only. No preamble, no commentary."""
 
-CLEANUP_USER = """Clean this transcript segment for readability.
+# Stable per-run prefix — cached by Claude across all chunk calls
+CLEANUP_PREFIX = """Clean this transcript segment for readability.
 
 Context:
 {context}
@@ -30,8 +31,10 @@ Context:
 Speaker information:
 {speaker_context}
 
-Transcript segment:
----
+Transcript segment:"""
+
+# Variable per-chunk suffix — not cached
+CLEANUP_SUFFIX = """---
 {transcript_text}
 ---
 
@@ -51,6 +54,10 @@ def cleanup_transcript(
     """
     context = build_context(transcript)
     speaker_context = build_speaker_context(transcript)
+
+    # Build the stable prefix once — Claude caches this across all chunk calls
+    cached_prefix = CLEANUP_PREFIX.format(context=context, speaker_context=speaker_context)
+
     chunks = chunk_by_words(
         transcript.segments,
         target_size=target_chunk_words,
@@ -59,28 +66,22 @@ def cleanup_transcript(
 
     total_usage = TokenUsage()
     cleaned_segments: list[Segment] = []
-    shift = 0.0  # track timing shift from text changes
 
-    for i, chunk in enumerate(chunks):
+    for chunk in chunks:
         chunk_text = " ".join(seg.text for seg in chunk)
-        prompt = CLEANUP_USER.format(
-            context=context,
-            speaker_context=speaker_context,
-            transcript_text=chunk_text,
-        )
+        prompt = CLEANUP_SUFFIX.format(transcript_text=chunk_text)
 
-        cleaned_text, usage = provider.generate(prompt, system=CLEANUP_SYSTEM)
+        cleaned_text, usage = provider.generate(
+            prompt,
+            system=CLEANUP_SYSTEM,
+            cached_prefix=cached_prefix,
+        )
         total_usage.input_tokens += usage.input_tokens
         total_usage.output_tokens += usage.output_tokens
+        total_usage.cache_write_tokens += usage.cache_write_tokens
+        total_usage.cache_read_tokens += usage.cache_read_tokens
 
-        # Map cleaned text back to segments, preserving timing
-        cleaned_segs = _text_to_segments(cleaned_text, chunk, shift)
-        for seg in cleaned_segs:
-            seg_start = seg.start + shift
-            seg_end = seg.end + shift
-            cleaned_segments.append(
-                Segment(start=seg_start, end=seg_end, text=seg.text)
-            )
+        cleaned_segments.extend(_text_to_segments(cleaned_text, chunk))
 
     return cleaned_segments, total_usage
 
@@ -88,37 +89,50 @@ def cleanup_transcript(
 def _text_to_segments(
     cleaned_text: str,
     original_chunk: list[Segment],
-    shift: float,
 ) -> list[Segment]:
-    """Convert cleaned text back to segments, distributing time proportionally."""
+    """Convert cleaned text back to segments, distributing time proportionally.
+
+    Speaker is inferred by finding which original segment's time range contains
+    the midpoint of each cleaned paragraph.
+    """
     if not original_chunk:
         return []
 
     paragraphs = [p.strip() for p in cleaned_text.strip().split("\n\n") if p.strip()]
     if not paragraphs:
-        return original_chunk
+        return list(original_chunk)
 
     total_start = original_chunk[0].start
     total_end = original_chunk[-1].end
     total_duration = total_end - total_start
 
-    # Distribute time proportionally by word count
     para_word_counts = [len(p.split()) for p in paragraphs]
     total_words = sum(para_word_counts) or 1
 
-    segments = []
+    segments: list[Segment] = []
     current_time = total_start
 
     for i, para in enumerate(paragraphs):
         proportion = para_word_counts[i] / total_words
         para_duration = total_duration * proportion
+        midpoint = current_time + para_duration / 2
+        speaker = _speaker_at(midpoint, original_chunk)
         segments.append(
             Segment(
                 start=current_time,
                 end=current_time + para_duration,
+                speaker=speaker,
                 text=para,
             )
         )
         current_time += para_duration
 
     return segments
+
+
+def _speaker_at(time: float, segments: list[Segment]) -> str | None:
+    """Return the speaker active at a given timestamp within a segment list."""
+    for seg in segments:
+        if seg.start <= time < seg.end:
+            return seg.speaker
+    return segments[-1].speaker if segments else None

@@ -28,7 +28,7 @@ flowchart TD
     H -->|yes| L[extract text]
     H -->|no| M[extract audio URL]
 
-    J --> O[transcript normalization]
+    J --> O[normalize + preprocess]
     K --> N[whisper.cpp transcription]
     M --> N
     I --> N
@@ -37,11 +37,15 @@ flowchart TD
     N --> O
     L --> O
 
-    O --> P[LLM cleanup pass]
-    P --> Q[chapter segmentation]
-    Q --> R[summary generation]
+    O --> P{AI passes?}
+    P -->|--cleanup| Q[transcript cleanup]
+    P -->|--enrich| R[chapters + takeaways + summary]
+    P -->|--glossary| R2[glossary]
+    Q --> S[markdown generation]
+    R --> S
+    R2 --> S
+    P -->|skip| S
 
-    R --> S[markdown generation]
     S --> T[EPUB generation]
     T --> U[OUTPUT .epub]
 ```
@@ -50,6 +54,13 @@ flowchart TD
 
 ```bash
 uv sync
+```
+
+For AI passes, install the provider you want:
+
+```bash
+uv sync --extra anthropic   # Claude (recommended — includes prompt caching)
+uv sync --extra openai      # OpenAI or DeepSeek
 ```
 
 ## Usage
@@ -62,73 +73,132 @@ podbook build https://example.com/podcast/episode
 podbook build ./episode.mp3
 ```
 
-### Build with token budget
+### AI-enhanced build
 
 ```bash
-podbook build --max-tokens 50000 <url>
+# Clean up filler words and add chapters/summary using local Ollama (default)
+podbook build --cleanup --enrich <url>
+
+# Use Claude with prompt caching (fastest for long podcasts)
+podbook build --cleanup --enrich --provider claude <url>
+
+# Use OpenAI
+podbook build --cleanup --enrich --provider openai --model gpt-4o-mini <url>
+
+# Use DeepSeek (requires DEEPSEEK_API_KEY)
+podbook build --cleanup --enrich --provider deepseek <url>
+
+# Add a glossary of key terms
+podbook build --enrich --glossary --provider claude <url>
 ```
 
-### Estimate costs without LLM calls
+### Estimate costs before running
 
 ```bash
-podbook build --dry-run <url>
-```
-
-### Force local transcription (skip subtitles)
-
-```bash
-podbook build --force-transcribe <url>
+podbook build --dry-run --cleanup --enrich <url>
 ```
 
 ### Transcript only
 
 ```bash
+# Save transcript as JSON (no EPUB)
 podbook transcript <url>
+podbook transcript <url> --output ./my-transcript.json
 ```
 
-### EPUB from existing transcript
+### EPUB from an existing transcript
 
 ```bash
-podbook epub transcript.md
+podbook epub ./my-transcript.json
 ```
+
+### Cache management
+
+```bash
+podbook cache list                       # show all cached artifacts
+podbook cache list --output-dir ./out    # specify output directory
+podbook cache clear                      # clear all cache
+podbook cache clear --type audio         # clear only audio files
+podbook cache clear --type transcript    # clear only transcript JSONs
+```
+
+### Token budget
+
+```bash
+# Hard cap on LLM usage — stops AI passes when budget is reached
+podbook build --max-tokens 50000 --cleanup --enrich <url>
+```
+
+### Force local transcription
+
+```bash
+# Skip subtitle check, always transcribe with whisper.cpp
+podbook build --force-transcribe <url>
+```
+
+## Providers
+
+| `--provider` | API key env var | Notes |
+|---|---|---|
+| `ollama` | — | Local, free. Default. Requires Ollama running. |
+| `claude` | `ANTHROPIC_API_KEY` | Prompt caching reduces cost on long podcasts. |
+| `openai` | `OPENAI_API_KEY` | GPT-4o-mini default. |
+| `deepseek` | `DEEPSEEK_API_KEY` | OpenAI-compatible API, competitive pricing. |
 
 ## Dependencies
 
 | Tool | Purpose |
 |---|---|
 | `yt-dlp` | YouTube audio + subtitle extraction |
-| `whisper.cpp` | Local transcription fallback |
-| `ebooklib` | EPUB generation with full CSS control |
+| `whisper.cpp` | Local transcription fallback (`pywhispercpp`) |
+| `ebooklib` | EPUB generation |
+| `markdown` | Markdown → HTML conversion for EPUB chapters |
 | `typer` | CLI framework |
 | `rich` | Terminal output |
 | `beautifulsoup4` | Podcast webpage parsing |
 | `feedparser` | RSS feed parsing |
-| `pydantic` | Data models |
+| `pydantic` | Immutable data models |
 
 ## Project Structure
 
 ```text
 podbook/
-├── cli/main.py            CLI entry point
-├── models.py              Canonical data models
-├── pipeline.py            End-to-end orchestration
+├── cli/main.py              CLI entry point (build, transcript, epub, cache)
+├── models.py                Canonical data models (Segment, Transcript, TokenUsage)
+├── pipeline.py              End-to-end orchestration
 ├── sources/
-│   ├── youtube.py         YouTube subtitle + audio extraction
-│   ├── webpage.py         Podcast page parsing
-│   ├── rss.py             RSS feed parsing
-│   └── local.py           Local file handling
+│   ├── youtube.py           YouTube subtitle + audio extraction
+│   ├── webpage.py           Podcast page parsing
+│   ├── rss.py               RSS feed parsing
+│   └── local.py             Local file handling
 ├── transcript/
-│   ├── subtitles.py       SRT/VTT parser
-│   ├── whisper.py         whisper.cpp transcription
-│   ├── normalize.py       Segment normalization
-│   └── chunking.py        Sentence-boundary chunking for LLM
+│   ├── whisper.py           whisper.cpp transcription
+│   ├── normalize.py         Segment normalization
+│   ├── preprocess.py        Ad/promo/filler classification + filtering
+│   └── chunking.py          Sentence-boundary chunking for LLM
 ├── ai/
-│   ├── providers/base.py  LLM provider ABC
-│   ├── providers/openai.py
-│   └── providers/ollama.py
-├── ebook/
-│   ├── markdown.py        Markdown generation
-│   └── epub.py            EPUB generation
-├── cache/
-└── outputs/
+│   ├── providers/
+│   │   ├── base.py          LLMProvider ABC (cached_prefix interface)
+│   │   ├── anthropic.py     Claude with prompt caching
+│   │   ├── openai.py        OpenAI + DeepSeek
+│   │   └── ollama.py        Local Ollama
+│   ├── cleanup.py           Chunked transcript cleanup pass
+│   ├── summarize.py         Chapters, takeaways, summary, glossary
+│   └── context.py           Podcast metadata → LLM context builder
+└── ebook/
+    ├── markdown.py          Markdown generation from transcript + enrichments
+    └── epub.py              EPUB generation via ebooklib
+tests/
+├── test_normalize.py
+├── test_preprocess.py
+├── test_chunking.py
+├── test_markdown.py
+└── test_epub.py
+```
+
+## Running tests
+
+```bash
+uv sync --extra dev
+uv run pytest
 ```
