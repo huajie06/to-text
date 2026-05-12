@@ -111,14 +111,14 @@ def _build_segment_chunk(
 ) -> list[Segment]:
     """Reconstruct minimal segments from buffered sentences."""
     if not seg_indices:
-        # Find which segments contributed
         combined = " ".join(sent_buf)
-        # Fallback: create one segment
         start = source_segments[0].start if source_segments else 0.0
         end = source_segments[-1].end if source_segments else 0.0
-        return [Segment(start=start, end=end, text=combined)]
+        speaker = source_segments[0].speaker if source_segments else None
+        return [Segment(start=start, end=end, text=combined, speaker=speaker)]
 
     indices = sorted(seg_indices)
     start = source_segments[indices[0]].start
     end = source_segments[indices[-1]].end
-    return [Segment(start=start, end=end, text=" ".join(sent_buf))]
+    speaker = source_segments[indices[0]].speaker
+    return [Segment(start=start, end=end, text=" ".join(sent_buf), speaker=speaker)]

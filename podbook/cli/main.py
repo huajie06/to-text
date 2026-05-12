@@ -74,6 +74,13 @@ def build(
             max=1.0,
         ),
     ] = None,
+    speakers: Annotated[
+        bool,
+        typer.Option(
+            "--speakers",
+            help="Label speakers in the transcript (auto-enabled with --cleanup).",
+        ),
+    ] = False,
 ) -> None:
     """Build an ebook from a podcast URL or local audio/video file."""
     from podbook.pipeline import run_pipeline
@@ -96,6 +103,7 @@ def build(
         provider=provider,
         model=model,
         fraction=fraction,
+        label_speakers=speakers,
     )
 
 

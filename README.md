@@ -8,6 +8,17 @@ Convert podcasts and videos into readable EPUB ebooks, optimized for Boox e-read
 podbook build <url>
 ```
 
+## Development Environment
+
+| Component | Detail |
+|---|---|
+| OS | Fedora Linux 44 (x86_64) |
+| Python | 3.12+ (developed on 3.14.4) |
+| Package manager | uv |
+| Transcription | faster-whisper (CTranslate2), base model |
+| Local LLM | Ollama — `gemma4:e2b` (Gemma 4B) |
+| Cloud LLMs | Claude Haiku 4.5, GPT-4o-mini, DeepSeek |
+
 ## Flow
 
 ```mermaid
@@ -29,7 +40,7 @@ flowchart TD
     H -->|no| M[extract audio URL]
 
     J --> O[normalize + preprocess]
-    K --> N[whisper.cpp transcription]
+    K --> N[faster-whisper transcription]
     M --> N
     I --> N
     F --> N
@@ -37,7 +48,10 @@ flowchart TD
     N --> O
     L --> O
 
-    O --> P{AI passes?}
+    O --> SP{--speakers or --cleanup?}
+    SP -->|yes| SL[speaker labeling LLM call]
+    SP -->|no| P
+    SL --> P{AI passes?}
     P -->|--cleanup| Q[transcript cleanup]
     P -->|--enrich| R[chapters + takeaways + summary]
     P -->|--glossary| R2[glossary]
@@ -79,6 +93,13 @@ podbook build ./episode.mp3
 # Clean up filler words and add chapters/summary using local Ollama (default)
 podbook build --cleanup --enrich <url>
 
+# Label speakers in the transcript (auto-enabled with --cleanup)
+podbook build --speakers <url>
+podbook build --speakers --cleanup <url>     # speaker labels + cleanup
+
+# When --cleanup is used, a *-raw.md is saved alongside the cleaned *.md
+# so you can compare pre- and post-cleanup output.
+
 # Use Claude with prompt caching (fastest for long podcasts)
 podbook build --cleanup --enrich --provider claude <url>
 
@@ -90,6 +111,9 @@ podbook build --cleanup --enrich --provider deepseek <url>
 
 # Add a glossary of key terms
 podbook build --enrich --glossary --provider claude <url>
+
+# Override the default model (e.g., for local Ollama)
+podbook build --cleanup --enrich --model gemma4:e2b <url>
 ```
 
 ### Estimate costs before running
@@ -132,7 +156,7 @@ podbook build --max-tokens 50000 --cleanup --enrich <url>
 ### Force local transcription
 
 ```bash
-# Skip subtitle check, always transcribe with whisper.cpp
+# Skip subtitle check, always transcribe with faster-whisper
 podbook build --force-transcribe <url>
 ```
 
@@ -150,7 +174,7 @@ podbook build --force-transcribe <url>
 | Tool | Purpose |
 |---|---|
 | `yt-dlp` | YouTube audio + subtitle extraction |
-| `whisper.cpp` | Local transcription fallback (`pywhispercpp`) |
+| `faster-whisper` | Local transcription fallback (CTranslate2, base model) |
 | `ebooklib` | EPUB generation |
 | `markdown` | Markdown → HTML conversion for EPUB chapters |
 | `typer` | CLI framework |
@@ -172,7 +196,7 @@ podbook/
 │   ├── rss.py               RSS feed parsing
 │   └── local.py             Local file handling
 ├── transcript/
-│   ├── whisper.py           whisper.cpp transcription
+│   ├── whisper.py           faster-whisper transcription
 │   ├── normalize.py         Segment normalization
 │   ├── preprocess.py        Ad/promo/filler classification + filtering
 │   └── chunking.py          Sentence-boundary chunking for LLM
@@ -183,6 +207,7 @@ podbook/
 │   │   ├── openai.py        OpenAI + DeepSeek
 │   │   └── ollama.py        Local Ollama
 │   ├── cleanup.py           Chunked transcript cleanup pass
+│   ├── speakers.py          Hybrid LLM + heuristic speaker labeling
 │   ├── summarize.py         Chapters, takeaways, summary, glossary
 │   └── context.py           Podcast metadata → LLM context builder
 └── ebook/

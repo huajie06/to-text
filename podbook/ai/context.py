@@ -40,11 +40,14 @@ def build_context(transcript: Transcript) -> str:
 
 
 def build_speaker_context(transcript: Transcript) -> str:
-    """Extract speaker hints from metadata and transcript patterns."""
+    """Extract speaker hints from metadata and transcript patterns.
+
+    Regex catches explicit Host/Guest labels; raw description snippet
+    lets the LLM pick up names embedded in prose.
+    """
     hints: list[str] = []
 
     if transcript.description:
-        # Look for "Host: Name" or "Guest: Name" patterns
         import re
         hosts = re.findall(r'(?:[Hh]ost(?:ed)?\s*(?:by)?:?\s*)([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)', transcript.description)
         guests = re.findall(r'(?:[Gg]uest(?:s)?:?\s*)([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)', transcript.description)
@@ -52,6 +55,7 @@ def build_speaker_context(transcript: Transcript) -> str:
             hints.append(f"Likely host(s): {', '.join(hosts[:3])}")
         if guests:
             hints.append(f"Likely guest(s): {', '.join(guests[:5])}")
+        hints.append(f"Description snippet: {transcript.description[:300].strip()}")
 
     return "\n".join(hints) if hints else ""
 

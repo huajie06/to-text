@@ -39,8 +39,16 @@ def extract_youtube(url: str, cache_dir: Path) -> Transcript:
 
 
 def download_audio(url: str, output_dir: Path) -> Path:
-    """Download audio from a YouTube URL. Returns path to the audio file."""
+    """Download audio from a YouTube URL. Returns path to the audio file.
+
+    Skips download if a WAV file already exists in the output directory.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = sorted(output_dir.glob("*.wav"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if existing:
+        return existing[0]
+
     output_path = output_dir / "%(title)s.%(ext)s"
 
     subprocess.run(

@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Dev Environment
+
+| Component | Detail |
+|---|---|
+| OS | Fedora Linux 44 (x86_64) |
+| Python | 3.12+ (developed on 3.14.4) |
+| Package manager | uv |
+| Transcription | faster-whisper (CTranslate2), base model |
+| Local LLM | Ollama — `gemma4:e2b` (Gemma 4B) |
+| Cloud LLMs | Claude Haiku 4.5, GPT-4o-mini, DeepSeek |
+| Test status | 63/64 pass (1 pre-existing `test_heavy_filler` failure) |
+
 ## Commands
 
 ```bash
@@ -18,6 +30,8 @@ podbook build --max-tokens 50000 <url>
 podbook build --cleanup --enrich --provider claude <url>
 podbook build --cleanup --enrich --glossary --provider claude <url>
 podbook build --cleanup --enrich --provider deepseek <url>
+podbook build --speakers <url>           # label speakers
+podbook build --speakers --cleanup <url> # speaker labels + cleanup (saves *-raw.md too)
 
 podbook transcript <url>                 # extract + save transcript JSON
 podbook epub transcript.json             # generate EPUB from saved transcript
@@ -50,7 +64,7 @@ Each source module returns a `Transcript`. YouTube is the only source that can r
 ### Transcript layer (`podbook/transcript/`)
 
 - `subtitles.py` — SRT/VTT parsing
-- `whisper.py` — wraps `pywhispercpp` (whisper.cpp Python bindings), expects 16kHz mono WAV
+- `whisper.py` — wraps `faster-whisper` (CTranslate2), expects 16kHz mono WAV
 - `normalize.py` — merges short segments, fixes overlaps, strips empties; always called before any downstream use
 - `preprocess.py` — classifies segments as CONTENT / AD / SELF_PROMO / META / FILLER using regex triggers + contextual fixes; `filter_content()` keeps only CONTENT before LLM passes
 - `chunking.py` — splits at sentence/paragraph boundaries for LLM processing, never mid-sentence
@@ -65,7 +79,7 @@ Supported providers (via `--provider`):
 
 | Flag value | Class | Default model |
 |---|---|---|
-| `ollama` | `OllamaProvider` | `llama3.2` |
+| `ollama` | `OllamaProvider` | `llama3.2` (local machine has `gemma4:e2b`) |
 | `openai` | `OpenAIProvider` | `gpt-4o-mini` |
 | `claude` | `ClaudeProvider` | `claude-haiku-4-5-20251001` |
 | `deepseek` | `OpenAIProvider` (alt base_url) | `deepseek-chat` |
@@ -75,6 +89,7 @@ Token usage is tracked from the start — the CLI enforces `--max-tokens` and `-
 #### AI passes
 
 - `cleanup.py` — chunked transcript cleaning; stable context prefix is cached by Claude across all chunks
+- `speakers.py` — hybrid speaker labeling: one cheap LLM call to identify speakers from a sample, then heuristic rules (turn-taking, question/length patterns, alternation) propagate labels to all segments. Auto-enabled with `--cleanup`.
 - `summarize.py` — `generate_chapters()`, `generate_takeaways()`, `generate_summary()`, `generate_glossary()`; each call passes a `cached_prefix` containing the shared context + transcript block
 
 ### Ebook layer (`podbook/ebook/`)
@@ -86,13 +101,14 @@ Token usage is tracked from the start — the CLI enforces `--max-tokens` and `-
 
 `run_pipeline()` orchestrates the full flow. `extract_transcript()` is also exported for use by the `transcript` CLI subcommand. Phases:
 
-1. Extract transcript (subtitles → audio → whisper fallback)
+1. Extract transcript (subtitles → audio → faster-whisper fallback)
 2. Normalize + preprocess (classify and filter non-content segments)
-3. AI passes: cleanup, chapters, takeaways, summary, glossary (all optional)
-4. Generate markdown
-5. Generate EPUB
+3. Phase 1.5 — Speaker labeling (if `--speakers` or `--cleanup`; one LLM call + heuristics)
+4. Phase 2 — AI passes: cleanup, chapters, takeaways, summary, glossary (all optional)
+5. Phase 3 — Generate markdown (saves `*-raw.md` if cleanup was run, for comparison)
+6. Phase 4 — Generate EPUB
 
-Cache files live in `output/.cache/` keyed by SHA-256 of the source URL.
+Cache files live in per-source directories under `output/`: `{hash[:8]}-{slug}/` containing transcript.json, audio, and subtitles. Markdown and EPUB are written to `output/`.
 
 ## Design rules
 

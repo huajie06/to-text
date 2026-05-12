@@ -28,6 +28,7 @@ def run_pipeline(
     provider: str = "ollama",
     model: str | None = None,
     fraction: float | None = None,
+    label_speakers: bool = False,
 ) -> Path | None:
     """Run the full PodBook pipeline.
 
@@ -45,7 +46,7 @@ def run_pipeline(
         _inspect_cache(output_dir, cache_key, source, source_type)
         console.print()
         if cleanup or enrich:
-            _show_cost_estimate(source, source_type, cleanup, enrich, provider, model, max_tokens)
+            _show_cost_estimate(source, source_type, cleanup, enrich, label_speakers or cleanup, provider, model, max_tokens)
         else:
             console.print("[dim]No AI passes requested. Use --cleanup or --enrich for LLM estimates.[/]")
         console.print()
@@ -125,12 +126,41 @@ def run_pipeline(
         console.print("[bold red]Error:[/] No content segments after filtering.")
         raise SystemExit(1)
 
-    # ── Phase 2: AI passes (optional) ────────────────────────────
+    # ── Phase 1.5: Speaker labeling ────────────────────────────────
     llm = None
     token_spent = 0
+    speaker_labeling_enabled = label_speakers or cleanup
 
+    if speaker_labeling_enabled:
+        if label_speakers:
+            console.print("[dim]──────────────────────────────────────────[/]")
+            console.print("[bold]Phase 1.5:[/] Speaker labeling...")
+        else:
+            console.print("[dim]──────────────────────────────────────────[/]")
+            console.print("[bold]Phase 1.5:[/] Speaker labeling [dim](auto-enabled with --cleanup)[/]")
+
+        from podbook.ai.speakers import label_speakers as do_speaker_label
+
+        speaker_llm = _get_provider(provider, model)
+        transcript, speaker_usage = do_speaker_label(transcript, speaker_llm)
+        token_spent += speaker_usage.total
+
+        speakers_seen: set[str] = set()
+        for seg in transcript.segments:
+            if seg.speaker:
+                speakers_seen.add(seg.speaker)
+        if speakers_seen:
+            console.print(
+                f"  [green]✓[/] Detected speakers: {', '.join(sorted(speakers_seen))}"
+            )
+        console.print(
+            f"  [dim]({speaker_usage.input_tokens:,} in / {speaker_usage.output_tokens:,} out)[/]"
+        )
+
+    # ── Phase 2: AI passes (optional) ────────────────────────────
     if cleanup or enrich:
-        llm = _get_provider(provider, model)
+        if llm is None:
+            llm = _get_provider(provider, model)
         console.print("[dim]──────────────────────────────────────────[/]")
         console.print(
             f"[bold]Phase 2:[/] AI processing "
@@ -222,6 +252,26 @@ def run_pipeline(
 
     from podbook.ebook.markdown import generate_markdown
 
+    slug = _slugify(transcript.source_title or "transcript")
+
+    # Save raw (pre-cleanup) markdown if we have speaker labels but skipped cleanup,
+    # or if we're about to run cleanup — so the user can compare both versions.
+    if speaker_labeling_enabled and cleanup and cleaned_segments:
+        raw_md = generate_markdown(
+            transcript,
+            chapters=chapters,
+            key_takeaways=takeaways,
+            final_summary=summary,
+            glossary=glossary_data,
+        )
+        raw_path = output_dir / f"{slug}-raw.md"
+        raw_path.write_text(raw_md)
+        console.print(f"  [dim]Raw (pre-cleanup) markdown → {raw_path}[/]")
+
+    # Apply cleaned segments to transcript for final output
+    if cleaned_segments:
+        transcript = transcript.model_copy(update={"segments": cleaned_segments})
+
     md_text = generate_markdown(
         transcript,
         chapters=chapters,
@@ -229,7 +279,7 @@ def run_pipeline(
         final_summary=summary,
         glossary=glossary_data,
     )
-    md_path = output_dir / f"{_slugify(transcript.source_title or 'transcript')}.md"
+    md_path = output_dir / f"{slug}.md"
     md_path.write_text(md_text)
     console.print(f"  [green]✓[/] Markdown written to {md_path}")
 
@@ -245,7 +295,7 @@ def run_pipeline(
         author=transcript.channel or "PodBook",
         language=transcript.language or "en",
     )
-    epub_path = output_dir / f"{_slugify(transcript.source_title or 'transcript')}.epub"
+    epub_path = output_dir / f"{slug}.epub"
     generate_epub(md_text, epub_path, epub_config)
     console.print(f"  [green]✓[/] EPUB written to {epub_path}")
 
@@ -328,6 +378,7 @@ def _show_cost_estimate(
     source_type: SourceType,
     cleanup: bool,
     enrich: bool,
+    speakers: bool,
     provider: str,
     model: str | None,
     max_tokens: int | None,
@@ -357,6 +408,13 @@ def _show_cost_estimate(
     table.add_column("Output tokens")
     table.add_column("Est. cost (GPT-4o-mini)")
     table.add_column("Est. cost (Haiku 4.5)")
+
+    if speakers:
+        in_tok = 2500
+        out_tok = 200
+        cost_4o = f"${in_tok * 0.15 / 1_000_000 + out_tok * 0.6 / 1_000_000:.5f}"
+        cost_haiku = f"${in_tok * 0.25 / 1_000_000 + out_tok * 1.25 / 1_000_000:.5f}"
+        table.add_row("Speaker labeling", f"{in_tok:,}", f"{out_tok:,}", cost_4o, cost_haiku)
 
     if cleanup:
         # Chunked: 7 chunks × ~4.2K input + output

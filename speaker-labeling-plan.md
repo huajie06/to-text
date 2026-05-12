@@ -39,7 +39,7 @@ Then heuristic rules propagate labels to all ~1156 segments using turn-taking, q
 
 Core module with these functions:
 
-- **`build_utterance_groups(segments, max_gap=1.5)`** — merge consecutive segments into speaker turns based on inter-segment gaps. A gap > 1.5s between segments is a strong turn indicator. Reduces ~1156 segments to ~200-400 utterance groups.
+- **`build_utterance_groups(segments, max_gap=1.5)`** — merge consecutive segments into speaker turns based on inter-segment gaps. A gap > 1.5s between segments is a strong turn indicator. Reduces ~1156 segments to ~200-400 utterance groups. Note: short host interjections can cause spurious boundaries; the interjection merge rule in `classify_all_groups` compensates for this.
 
 - **`extract_sample(groups, sample_size=40)`** — pick representative groups: first 3 (intro, always host), last 3 (outro, always host), plus evenly-spaced diverse groups from each third of the transcript. Total: ~40 groups, ~2000-3000 input tokens.
 
@@ -54,34 +54,37 @@ Core module with these functions:
   - **Length rule**: long groups (>50 words) without questions → guest
   - **Intro/outro rule**: first and last 3 groups default to host
   - **Alternation**: between anchors, speakers alternate
+  - **Interjection merge**: if a group is < 5 words and both adjacent groups share the same speaker, merge it into them (catches host backchanneling like "right", "mm-hmm" that would otherwise create spurious turn boundaries)
 
 - **`expand_labels(segments, labeled_groups)`** — map group labels back to individual segments
 
 - **`label_speakers(transcript, provider)`** — main entry point
 
-### 2. Fix: `podbook/ai/cleanup.py` — preserve speaker field
+### 2. Fix: `podbook/transcript/chunking.py` — preserve speaker field (prerequisite)
 
-Two locations drop the `speaker` field:
+`_build_segment_chunk()` (lines 119, 124) creates new `Segment` without `speaker=`. Fix: carry forward speaker from any constituent segment that has one.
 
-- **`_text_to_segments()`** — new `Segment(...)` omits `speaker`. Fix: use time-window overlap majority vote to determine speaker per paragraph.
+**This must be fixed before Step 3 (pipeline integration) — otherwise speaker labels assigned in Phase 1.5 will be lost during the chunk → LLM → un-chunk roundtrip in cleanup.**
 
-- **`cleanup_transcript()` assembly loop** — pass `speaker=seg.speaker` through when creating new Segment objects.
+Note: `cleanup.py` already preserves speaker in `_text_to_segments()` via `_speaker_at()` — no changes needed there.
 
-### 3. Fix: `podbook/transcript/chunking.py` — preserve speaker field
+### 3. Edit: `podbook/pipeline.py` — add Phase 1.5
 
-`_build_segment_chunk()` creates new `Segment` without `speaker`. Fix: carry forward speaker from any constituent segment that has one.
+Insert speaker labeling after preprocessing/filtering, before cleanup. When `--cleanup` is used, auto-enable speaker labeling and print:
 
-### 4. Edit: `podbook/pipeline.py` — add Phase 1.5
+```
+[bold]Speaker labeling:[/] enabled (cleanup mode)
+```
 
-Insert speaker labeling after preprocessing/filtering, before cleanup. Auto-enable when `--cleanup` is used. Add `label_speakers` parameter. Print detected speakers to console.
+Add `label_speakers` parameter. Print detected speakers to console after labeling. When `--fraction` is set, labeling naturally operates on the already-sampled segments — no special handling needed.
 
-### 5. Edit: `podbook/cli/main.py` — add `--speakers` flag
+### 4. Edit: `podbook/cli/main.py` — add `--speakers` flag
 
-New CLI flag `--speakers` to explicitly request speaker labeling. Also auto-enabled when `--cleanup` is used.
+New CLI flag `--speakers` to explicitly request speaker labeling. Also auto-enabled when `--cleanup` is used (with console message as above).
 
-### 6. Edit: `podbook/ai/context.py` — enhance regex
+### 5. Edit: `podbook/ai/context.py` — enhance speaker extraction
 
-Broaden `build_speaker_context()` regex patterns to match more name formats and common podcast description patterns.
+Rather than broadening fragile regex patterns, pass the raw first 200 characters of the description to the speaker-identification LLM call. Regex-extracted names are too brittle for the variety of real-world podcast description formats.
 
 ## Edge Cases
 
@@ -90,7 +93,7 @@ Broaden `build_speaker_context()` regex patterns to match more name formats and 
 | Solo podcast | All segments get same speaker |
 | 3+ speakers | Alternation degrades, groups without strong features stay unlabeled |
 | No metadata | LLM falls back to "Speaker 1" / "Speaker 2" based on conversation patterns |
-| Overlapping speech | Time-window majority vote in cleanup reconstruction |
+| Overlapping speech | Midpoint time-window matching in `cleanup._speaker_at()` (already implemented) |
 | Non-English | Language-agnostic — relies on turn-taking + question marks |
 | Dry run | Cost estimate includes speaker labeling token estimate |
 | No segments after filtering | Speaker labeling skipped, returns early |
@@ -99,12 +102,12 @@ Broaden `build_speaker_context()` regex patterns to match more name formats and 
 
 ```bash
 # Test with 1/8 transcript, speakers only
-podbook build "https://www.youtube.com/watch?v=jLFG_FZKbks" \
+podbook build "https://www.youtube.com/watch?v=IQBA4aytp_U" \
   --output output/speaker-test \
   --speakers --fraction 0.125
 
 # Test with speakers + cleanup + enrich
-podbook build "https://www.youtube.com/watch?v=jLFG_FZKbks" \
+podbook build "https://www.youtube.com/watch?v=IQBA4aytp_U" \
   --output output/speaker-test-v2 \
   --speakers --cleanup --enrich --fraction 0.125
 
