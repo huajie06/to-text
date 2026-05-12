@@ -115,20 +115,19 @@ def transcript(
     ] = False,
 ) -> None:
     """Extract a transcript and save it as JSON (no EPUB generated)."""
-    from podbook.pipeline import extract_transcript
+    from podbook.pipeline import _resolve_source_dir, extract_transcript, _slugify
 
     src_type = _detect_source_type(source)
     console.print(f"[bold]Extracting transcript from:[/] {_source_label(src_type)}")
 
     output_dir = output.parent if output and output.suffix else (output or Path("output"))
-    cache_dir = output_dir / ".cache"
     output_dir.mkdir(parents=True, exist_ok=True)
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    source_dir = _resolve_source_dir(source, output_dir)
 
     tr = extract_transcript(
         source=source,
         source_type=src_type,
-        cache_dir=cache_dir,
+        source_dir=source_dir,
         force_transcribe=force_transcribe,
     )
 
@@ -195,38 +194,41 @@ def cache_list(
     """List all cached artifacts in the output directory."""
     from rich.table import Table
 
-    cache_dir = output_dir / ".cache"
-    if not cache_dir.exists():
+    source_dirs = sorted(
+        [d for d in output_dir.iterdir() if d.is_dir() and "-" in d.name],
+        key=lambda d: d.name,
+    )
+    if not source_dirs and not any(output_dir.glob("*.md")) and not any(output_dir.glob("*.epub")):
         console.print("[yellow]No cache directory found.[/]")
         raise typer.Exit(0)
 
-    table = Table(title=f"Cache: {cache_dir}")
+    table = Table(title=f"Cache: {output_dir}")
+    table.add_column("Source", style="dim")
     table.add_column("Type", style="dim")
     table.add_column("File")
     table.add_column("Size")
 
-    patterns = [
-        ("Transcript JSON", "*.transcript.json"),
-        ("Audio (WAV)", "*.wav"),
-        ("Audio (MP3)", "*.mp3"),
-        ("Subtitles", "*.json3"),
-        ("Subtitles (SRT)", "*.srt"),
-        ("Subtitles (VTT)", "*.vtt"),
-    ]
-
     any_found = False
-    for label, pattern in patterns:
-        for f in sorted(cache_dir.glob(pattern)):
-            size = f.stat().st_size
-            table.add_row(label, f.name, _human_size(size))
-            any_found = True
+    for sd in source_dirs:
+        source_label = sd.name
+        for f in sorted(sd.iterdir()):
+            if f.is_file():
+                file_type = f.suffix.upper().lstrip(".")
+                if file_type == "JSON":
+                    file_type = "Transcript"
+                elif file_type in ("WAV", "MP3"):
+                    file_type = "Audio"
+                elif file_type in ("JSON3", "SRT", "VTT"):
+                    file_type = "Subtitles"
+                table.add_row(source_label, file_type, f.name, _human_size(f.stat().st_size))
+                any_found = True
 
     for f in sorted(output_dir.glob("*.md")):
-        table.add_row("Markdown", f.name, _human_size(f.stat().st_size))
+        table.add_row("—", "Markdown", f.name, _human_size(f.stat().st_size))
         any_found = True
 
     for f in sorted(output_dir.glob("*.epub")):
-        table.add_row("EPUB", f.name, _human_size(f.stat().st_size))
+        table.add_row("—", "EPUB", f.name, _human_size(f.stat().st_size))
         any_found = True
 
     if any_found:
@@ -251,14 +253,17 @@ def cache_clear(
     ] = False,
 ) -> None:
     """Clear cached artifacts from the output directory."""
-    cache_dir = output_dir / ".cache"
-    if not cache_dir.exists():
+    source_dirs = sorted(
+        [d for d in output_dir.iterdir() if d.is_dir() and "-" in d.name],
+        key=lambda d: d.name,
+    )
+    if not source_dirs:
         console.print("[yellow]No cache directory found.[/]")
         raise typer.Exit(0)
 
     type_patterns: dict[str, list[str]] = {
         "audio": ["*.wav", "*.mp3", "*.m4a"],
-        "transcript": ["*.transcript.json"],
+        "transcript": ["transcript.json"],
         "subtitle": ["*.json3", "*.srt", "*.vtt"],
     }
 
@@ -271,7 +276,11 @@ def cache_clear(
         console.print(f"[red]Unknown type '{selected}'. Use: audio, transcript, subtitle, all[/]")
         raise typer.Exit(1)
 
-    targets = [f for pat in patterns for f in cache_dir.glob(pat)]
+    targets = []
+    for sd in source_dirs:
+        for pat in patterns:
+            targets.extend(sd.glob(pat))
+
     if not targets:
         console.print("[dim]Nothing to clear.[/]")
         raise typer.Exit(0)
@@ -314,14 +323,6 @@ def _source_label(src_type: SourceType) -> str:
         SourceType.LOCAL_AUDIO: "Local Audio File",
         SourceType.LOCAL_VIDEO: "Local Video File",
     }[src_type]
-
-
-def _slugify(text: str) -> str:
-    import re
-    text = text.lower().strip()
-    text = re.sub(r"[^\w\s-]", "", text)
-    text = re.sub(r"[-\s]+", "-", text)
-    return text[:100]
 
 
 def _human_size(n: int) -> str:

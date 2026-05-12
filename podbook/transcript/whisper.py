@@ -1,4 +1,4 @@
-"""Local transcription via whisper.cpp."""
+"""Local transcription via faster-whisper (CTranslate2)."""
 
 from __future__ import annotations
 
@@ -12,22 +12,23 @@ def transcribe(
     model_name: str = "base",
     language: str | None = None,
 ) -> list[Segment]:
-    """Transcribe an audio file using whisper.cpp.
+    """Transcribe an audio file using faster-whisper.
 
     Args:
         audio_path: Path to a 16kHz mono WAV file.
-        model_name: Whisper model size (tiny, base, small, medium, large).
+        model_name: Whisper model size or HuggingFace model ID
+                    (e.g. 'base', 'small', 'deepdml/faster-whisper-large-v3-turbo').
         language: Language code hint (e.g. 'en').
 
     Returns:
         List of transcript segments with timing.
     """
-    from pywhispercpp.model import Model
+    from faster_whisper import WhisperModel
 
-    model = Model(model_name)
+    model = WhisperModel(model_name, device="cpu", compute_type="int8")
     segments = []
 
-    result = model.transcribe(
+    result, info = model.transcribe(
         str(audio_path),
         language=language,
     )
@@ -35,8 +36,8 @@ def transcribe(
     for seg in result:
         segments.append(
             Segment(
-                start=seg.t0 / 100.0 if hasattr(seg, "t0") else 0.0,
-                end=seg.t1 / 100.0 if hasattr(seg, "t1") else 0.0,
+                start=seg.start,
+                end=seg.end,
                 text=seg.text.strip(),
             )
         )
@@ -45,7 +46,7 @@ def transcribe(
 
 
 def ensure_wav(audio_path: Path, output_path: Path | None = None) -> Path:
-    """Ensure audio is in 16kHz mono WAV format expected by whisper.cpp.
+    """Ensure audio is in 16kHz mono WAV format for transcription.
 
     Converts via ffmpeg if the file is not already 16kHz mono WAV.
     """

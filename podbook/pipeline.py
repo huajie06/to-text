@@ -35,8 +35,6 @@ def run_pipeline(
     """
     output_dir = output_dir or Path("output")
     output_dir.mkdir(parents=True, exist_ok=True)
-    cache_dir = output_dir / ".cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
 
     cache_key = _cache_key(source)
 
@@ -44,7 +42,7 @@ def run_pipeline(
     if dry_run:
         console.print("[bold]DRY RUN[/] — no expensive operations will be performed")
         console.print()
-        _inspect_cache(cache_dir, cache_key, source, source_type)
+        _inspect_cache(output_dir, cache_key, source, source_type)
         console.print()
         if cleanup or enrich:
             _show_cost_estimate(source, source_type, cleanup, enrich, provider, model, max_tokens)
@@ -58,10 +56,11 @@ def run_pipeline(
     console.print("[dim]──────────────────────────────────────────[/]")
     console.print("[bold]Phase 1:[/] Extracting transcript...")
 
+    source_dir = _resolve_source_dir(source, output_dir)
     transcript = _extract_transcript(
         source=source,
         source_type=source_type,
-        cache_dir=cache_dir,
+        source_dir=source_dir,
         force_transcribe=force_transcribe,
     )
 
@@ -82,7 +81,7 @@ def run_pipeline(
         console.print(f"  [dim]Description:[/] {desc_preview}...")
 
     # Cache the transcript as JSON
-    _save_transcript_cache(cache_dir, cache_key, transcript)
+    _save_transcript_cache(source_dir, transcript)
 
     # ── Preprocessing: classify + filter segments ────────────────
     from podbook.transcript.preprocess import (
@@ -264,59 +263,62 @@ def run_pipeline(
 # ═══════════════════════════════════════════════════════════════════
 
 def _inspect_cache(
-    cache_dir: Path,
+    output_dir: Path,
     cache_key: str,
     source: str,
     source_type: SourceType,
 ) -> None:
-    """Inspect what's in the cache and report status."""
+    """Inspect per-source folders and report cache status."""
+    prefix = cache_key[:8]
+    source_dirs = list(output_dir.glob(f"{prefix}-*"))
+
     table = Table(title=f"Cache status for: {source[:80]}")
     table.add_column("Artifact", style="dim")
     table.add_column("Status")
     table.add_column("Path")
 
-    # Check audio cache
-    audio_files = list(cache_dir.glob(f"*.wav")) + list(cache_dir.glob(f"*.mp3"))
-    audio_cached = any(_cache_key(str(f)) == cache_key for f in audio_files) if audio_files else False
-    table.add_row(
-        "Audio download",
-        "[green]cached[/]" if audio_files else "[yellow]not cached[/]",
-        str(audio_files[0])[:60] if audio_files else "—",
-    )
+    if not source_dirs:
+        table.add_row("Source folder", "[yellow]not found[/]", "—")
+        console.print(table)
+        return
 
-    # Check transcript cache
-    transcript_cache = cache_dir / f"{cache_key}.transcript.json"
-    if transcript_cache.exists():
+    sd = source_dirs[0]
+
+    # Transcript
+    transcript_file = sd / "transcript.json"
+    if transcript_file.exists():
         try:
-            data = json.loads(transcript_cache.read_text())
+            data = json.loads(transcript_file.read_text())
             segs = len(data.get("segments", []))
-            table.add_row(
-                "Transcript",
-                f"[green]cached ({segs} segments)[/]",
-                str(transcript_cache)[:60],
-            )
+            table.add_row("Transcript", f"[green]cached ({segs} segments)[/]", str(transcript_file)[:60])
         except (json.JSONDecodeError, KeyError):
-            table.add_row("Transcript", "[red]corrupted[/]", str(transcript_cache)[:60])
+            table.add_row("Transcript", "[red]corrupted[/]", str(transcript_file)[:60])
     else:
         table.add_row("Transcript", "[yellow]not cached[/]", "—")
 
-    # Check subtitle cache
-    sub_files = list(cache_dir.glob("*.json3")) + list(cache_dir.glob("*.srt")) + list(cache_dir.glob("*.vtt"))
+    # Audio
+    audio_files = list(sd.glob("*.wav")) + list(sd.glob("*.mp3"))
+    if audio_files:
+        table.add_row("Audio", "[green]cached[/]", str(audio_files[0])[:60])
+    else:
+        table.add_row("Audio", "[yellow]not cached[/]", "—")
+
+    # Subtitles
+    sub_files = list(sd.glob("*.json3")) + list(sd.glob("*.srt")) + list(sd.glob("*.vtt"))
     if sub_files:
         table.add_row("Subtitles", "[green]cached[/]", str(sub_files[0])[:60])
     else:
         table.add_row("Subtitles", "[dim]unavailable[/]", "—")
 
-    # Check markdown cache
-    md_files = list(cache_dir.parent.glob("*.md"))
-    slug_matches = [f for f in md_files if cache_key[:16] in f.name or cache_key[:16] in str(f)]
-    if slug_matches:
-        table.add_row("Markdown", "[green]cached[/]", str(slug_matches[0])[:60])
-
-    # Check EPUB cache
-    epub_files = list(cache_dir.parent.glob("*.epub"))
-    if epub_files:
-        table.add_row("EPUB", "[green]cached[/]", str(epub_files[0])[:60])
+    # Markdown / EPUB (at output root)
+    slug = sd.name.split("-", 1)[-1] if "-" in sd.name else ""
+    for label, ext in [("Markdown", "md"), ("EPUB", "epub")]:
+        files = list(output_dir.glob(f"*.{ext}"))
+        matches = [f for f in files if slug and slug in _slugify(f.stem)]
+        if matches:
+            table.add_row(label, "[green]cached[/]", str(matches[0])[:60])
+        else:
+            table.add_row(label, "[dim]not found[/]", "—")
 
     console.print(table)
 
@@ -404,15 +406,53 @@ def _cache_key(source: str) -> str:
     return hashlib.sha256(source.encode()).hexdigest()[:32]
 
 
-def _save_transcript_cache(cache_dir: Path, cache_key: str, transcript: Transcript) -> None:
-    """Save transcript as JSON in the cache."""
-    cache_path = cache_dir / f"{cache_key}.transcript.json"
+def _source_dir_name(source: str, title: str) -> str:
+    """Folder name for a source: {hash[:8]}-{slugified title}."""
+    return f"{_cache_key(source)[:8]}-{_slugify(title) or 'untitled'}"
+
+
+def _resolve_source_dir(source: str, output_dir: Path) -> Path:
+    """Resolve the per-source directory, creating it if needed."""
+    prefix = _cache_key(source)[:8]
+
+    # Check for existing folder with matching hash prefix
+    existing = list(output_dir.glob(f"{prefix}-*"))
+    if existing:
+        return existing[0]
+
+    # Try to get title for a meaningful folder name
+    title = _try_fetch_title(source)
+    slug = _slugify(title) if title else "pending"
+    source_dir = output_dir / f"{prefix}-{slug}"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    return source_dir
+
+
+def _try_fetch_title(source: str) -> str | None:
+    """Lightweight title fetch (no audio download). Returns None on failure."""
+    from podbook.models import SourceType as ST
+    import subprocess
+    import json
+
+    try:
+        result = subprocess.run(
+            ["yt-dlp", "--dump-json", "--no-playlist", source],
+            check=True, capture_output=True, text=True, timeout=30,
+        )
+        return json.loads(result.stdout).get("title")
+    except Exception:
+        return None
+
+
+def _save_transcript_cache(source_dir: Path, transcript: Transcript) -> None:
+    """Save transcript as JSON in the source folder."""
+    cache_path = source_dir / "transcript.json"
     cache_path.write_text(transcript.model_dump_json(indent=2))
 
 
-def _load_transcript_cache(cache_dir: Path, cache_key: str) -> Transcript | None:
-    """Load transcript from cache if available."""
-    cache_path = cache_dir / f"{cache_key}.transcript.json"
+def _load_transcript_cache(source_dir: Path) -> Transcript | None:
+    """Load transcript from source folder if available."""
+    cache_path = source_dir / "transcript.json"
     if cache_path.exists():
         try:
             return Transcript.model_validate_json(cache_path.read_text())
@@ -428,17 +468,15 @@ def _load_transcript_cache(cache_dir: Path, cache_key: str) -> Transcript | None
 def _extract_transcript(
     source: str,
     source_type: SourceType,
-    cache_dir: Path,
+    source_dir: Path,
     force_transcribe: bool = False,
 ) -> Transcript:
     """Extract transcript from source, preferring subtitles over transcription."""
     from podbook.transcript.normalize import normalize
 
-    cache_key = _cache_key(source)
-
     # Check cache first (unless force_transcribe)
     if not force_transcribe:
-        cached = _load_transcript_cache(cache_dir, cache_key)
+        cached = _load_transcript_cache(source_dir)
         if cached and cached.segments:
             console.print("  [dim](using cached transcript)[/]")
             return cached
@@ -448,30 +486,30 @@ def _extract_transcript(
     if source_type == SourceType.YOUTUBE:
         from podbook.sources.youtube import download_audio, extract_youtube
 
-        transcript = extract_youtube(source, cache_dir)
+        transcript = extract_youtube(source, source_dir)
 
         if not transcript.segments or force_transcribe:
             console.print("  No subtitles found, downloading audio for transcription...")
             # Check audio cache
-            audio_files = list(cache_dir.glob("*.wav")) + list(cache_dir.glob("*.16k.wav"))
+            audio_files = list(source_dir.glob("*.wav")) + list(source_dir.glob("*.16k.wav"))
             if audio_files and not force_transcribe:
                 audio_path = audio_files[0]
                 console.print("  [dim](using cached audio)[/]")
             else:
-                audio_path = download_audio(source, cache_dir)
+                audio_path = download_audio(source, source_dir)
             transcript = _transcribe_audio(audio_path, transcript)
 
     elif source_type == SourceType.PODCAST_PAGE:
         from podbook.sources.webpage import extract_webpage
 
-        transcript = extract_webpage(source, cache_dir)
+        transcript = extract_webpage(source, source_dir)
         if not transcript.segments:
             console.print("[yellow]Warning:[/] No transcript found on page.")
 
     elif source_type == SourceType.RSS:
         from podbook.sources.rss import extract_rss
 
-        transcript = extract_rss(source, cache_dir)
+        transcript = extract_rss(source, source_dir)
         if not transcript.segments:
             console.print("[yellow]Warning:[/] RSS feed processed but no audio downloaded yet.")
 
@@ -493,7 +531,7 @@ def _transcribe_audio(audio_path: Path, transcript: Transcript) -> Transcript:
     """Transcribe audio and update the transcript with segments."""
     from podbook.transcript.whisper import ensure_wav, transcribe
 
-    console.print("  Transcribing with whisper.cpp (model=base)...")
+    console.print("  Transcribing with faster-whisper (model=base)...")
     wav_path = ensure_wav(audio_path)
     segments = transcribe(wav_path, model_name="base")
     console.print(f"  [green]✓[/] Transcription produced {len(segments)} segments")
@@ -505,14 +543,14 @@ def extract_transcript(
     *,
     source: str,
     source_type: SourceType,
-    cache_dir: Path,
+    source_dir: Path,
     force_transcribe: bool = False,
 ) -> Transcript:
     """Public entry point for transcript extraction (used by the transcript CLI command)."""
     return _extract_transcript(
         source=source,
         source_type=source_type,
-        cache_dir=cache_dir,
+        source_dir=source_dir,
         force_transcribe=force_transcribe,
     )
 
