@@ -269,7 +269,9 @@ def classify_all_groups(
             labels[i] = host_name
 
     # Anchor propagation: unlabeled groups adjacent to labeled ones
-    # without a turn gap get the same speaker
+    # without a turn gap get the same speaker. Use 1.5s — same threshold
+    # as build_utterance_groups — so propagation fires across all within-turn
+    # gaps, not just word-count-split sub-groups.
     changed = True
     while changed:
         changed = False
@@ -277,12 +279,12 @@ def classify_all_groups(
             if labels[i] is not None:
                 continue
             if i > 0 and labels[i - 1] is not None:
-                if groups[i].start - groups[i - 1].end < 0.5:
+                if groups[i].start - groups[i - 1].end < 1.5:
                     labels[i] = labels[i - 1]
                     changed = True
                     continue
             if i < n - 1 and labels[i + 1] is not None:
-                if groups[i + 1].start - groups[i].end < 0.5:
+                if groups[i + 1].start - groups[i].end < 1.5:
                     labels[i] = labels[i + 1]
                     changed = True
 
@@ -305,20 +307,29 @@ def classify_all_groups(
             if labels[i - 1] == labels[i + 1] and labels[i] != labels[i - 1]:
                 labels[i] = labels[i - 1]
 
-    # Alternation fill between anchors
+    # Alternation fill between anchors: handles both same-speaker spans and
+    # transition zones (Host-None-Guest). For transitions, pick the nearer
+    # neighbor — the unlabeled group likely belongs to whoever it sits closest to.
     for i in range(1, n - 1):
         if labels[i] is not None:
             continue
-        if labels[i - 1] is not None and labels[i + 1] is not None:
-            if labels[i - 1] == labels[i + 1]:
-                labels[i] = labels[i - 1]
+        prev_label = labels[i - 1]
+        next_label = labels[i + 1]
+        if prev_label is None or next_label is None:
+            continue
+        if prev_label == next_label:
+            labels[i] = prev_label
+        else:
+            gap_prev = groups[i].start - groups[i - 1].end
+            gap_next = groups[i + 1].start - groups[i].end
+            labels[i] = prev_label if gap_prev <= gap_next else next_label
 
     # Fill remaining with host as safe default
     for i in range(n):
         if labels[i] is None:
             labels[i] = host_name
 
-    return [l or host_name for l in labels]
+    return [lbl or host_name for lbl in labels]
 
 
 def expand_labels(

@@ -254,20 +254,6 @@ def run_pipeline(
 
     slug = _slugify(transcript.source_title or "transcript")
 
-    # Save raw (pre-cleanup) markdown if we have speaker labels but skipped cleanup,
-    # or if we're about to run cleanup — so the user can compare both versions.
-    if speaker_labeling_enabled and cleanup and cleaned_segments:
-        raw_md = generate_markdown(
-            transcript,
-            chapters=chapters,
-            key_takeaways=takeaways,
-            final_summary=summary,
-            glossary=glossary_data,
-        )
-        raw_path = output_dir / f"{slug}-raw.md"
-        raw_path.write_text(raw_md)
-        console.print(f"  [dim]Raw (pre-cleanup) markdown → {raw_path}[/]")
-
     # Apply cleaned segments to transcript for final output
     if cleaned_segments:
         transcript = transcript.model_copy(update={"segments": cleaned_segments})
