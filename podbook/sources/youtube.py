@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import subprocess
-import tempfile
 from pathlib import Path
 
 from podbook.models import Segment, Transcript
+from podbook.transcript.subtitles import parse_vtt
 
 
 def extract_youtube(url: str, cache_dir: Path) -> Transcript:
@@ -91,56 +91,31 @@ def _download_subtitles(url: str, cache_dir: Path) -> list[Segment] | None:
     """Download subtitles as structured segments. Returns None if unavailable."""
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Try JSON3 format (includes timing) — prefer manual, fall back to auto
-    for sub_type in ("", "--write-auto-sub"):
+    # Try manual subtitles first, then auto-generated; convert to VTT for timing
+    for write_auto in (False, True):
         args = [
             "yt-dlp",
             "--skip-download",
             "--write-sub",
-            "--sub-format", "json3",
             "--sub-lang", "en",
-            "--convert-subs", "json3",
+            "--convert-subs", "vtt",
             "--output", str(cache_dir / "%(title)s"),
             "--no-playlist",
         ]
-        if sub_type:
-            args.insert(3, sub_type)
+        if write_auto:
+            args.insert(3, "--write-auto-sub")
 
         try:
             subprocess.run(args + [url], check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError:
             continue
 
-        # Look for .json3 subtitle file
-        json3_files = sorted(
-            cache_dir.glob("*.json3"),
+        vtt_files = sorted(
+            cache_dir.glob("*.vtt"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
-        if json3_files:
-            return _parse_json3(json3_files[0])
+        if vtt_files:
+            return parse_vtt(vtt_files[0])
 
     return None
-
-
-def _parse_json3(path: Path) -> list[Segment]:
-    data = json.loads(path.read_text())
-    events = data.get("events", [])
-    segments = []
-
-    for ev in events:
-        segs = ev.get("segs", [])
-        if not segs:
-            continue
-        start = ev.get("tStartMs", 0) / 1000.0
-        dur = ev.get("dDurationMs", 0) / 1000.0
-        text = "".join(s.get("utf8", "") for s in segs).strip()
-        if text:
-            segments.append(
-                Segment(
-                    start=start,
-                    end=start + dur if dur > 0 else start + 5.0,
-                    text=text,
-                )
-            )
-    return segments

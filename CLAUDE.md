@@ -6,12 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 | Component | Detail |
 |---|---|
-| OS | Fedora Linux 44 (x86_64) |
-| Python | 3.12+ (developed on 3.14.4) |
+| OS | Fedora Linux 44 (x86_64) · macOS (Darwin, Apple Silicon) |
+| Python | 3.12+ (developed on 3.14.x) |
 | Package manager | uv |
 | Transcription | faster-whisper (CTranslate2), base model |
-| Local LLM | Ollama — `gemma4:e2b` (Gemma 4B) |
+| Local LLM | Ollama — `gemma4:e2b` (7.2 GB); install via `brew install ollama` on macOS |
 | Cloud LLMs | Claude Haiku 4.5, GPT-4o-mini, DeepSeek |
+| System deps | `ffmpeg` — required for audio download/transcription fallback (`brew install ffmpeg`) |
 | Test status | 63/64 pass (1 pre-existing `test_heavy_filler` failure) |
 
 ## Commands
@@ -19,7 +20,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Install and sync dependencies
 uv sync
-uv sync --extra dev          # includes pytest
+uv sync --extra dev                      # includes pytest
+uv sync --extra dev --extra anthropic --extra openai  # all providers
 
 # Run CLI
 podbook --help
@@ -30,6 +32,7 @@ podbook build --max-tokens 50000 <url>
 podbook build --cleanup --enrich --provider claude <url>
 podbook build --cleanup --enrich --glossary --provider claude <url>
 podbook build --cleanup --enrich --provider deepseek <url>
+podbook build --cleanup --enrich --speakers --provider ollama --model gemma4:e2b <url>
 podbook build --speakers <url>           # label speakers
 podbook build --speakers --cleanup <url> # speaker labels + cleanup (saves *-raw.md too)
 
@@ -59,11 +62,11 @@ The pipeline is a linear chain: **source → transcript → preprocess → AI pa
 
 ### Source layer (`podbook/sources/`)
 
-Each source module returns a `Transcript`. YouTube is the only source that can return populated `segments` (via subtitles). All others return `segments=[]`, which triggers the transcription fallback in the pipeline.
+Each source module returns a `Transcript`. YouTube is the only source that can return populated `segments` (via subtitles). All others return `segments=[]`, which triggers the transcription fallback in the pipeline. YouTube subtitles are downloaded as VTT and parsed with rolling-caption deduplication (auto-generated captions repeat previous text as a prefix in each cue; `_dedup_rolling_captions` strips it).
 
 ### Transcript layer (`podbook/transcript/`)
 
-- `subtitles.py` — SRT/VTT parsing
+- `subtitles.py` — SRT/VTT parsing; `_dedup_rolling_captions()` strips YouTube rolling-caption prefix duplication from both formats
 - `whisper.py` — wraps `faster-whisper` (CTranslate2), expects 16kHz mono WAV
 - `normalize.py` — merges short segments, fixes overlaps, strips empties; always called before any downstream use
 - `preprocess.py` — classifies segments as CONTENT / AD / SELF_PROMO / META / FILLER using regex triggers + contextual fixes; `filter_content()` keeps only CONTENT before LLM passes
@@ -79,7 +82,7 @@ Supported providers (via `--provider`):
 
 | Flag value | Class | Default model |
 |---|---|---|
-| `ollama` | `OllamaProvider` | `llama3.2` (local machine has `gemma4:e2b`) |
+| `ollama` | `OllamaProvider` | `llama3.2` (override with `--model`; local machine uses `gemma4:e2b`) |
 | `openai` | `OpenAIProvider` | `gpt-4o-mini` |
 | `claude` | `ClaudeProvider` | `claude-haiku-4-5-20251001` |
 | `deepseek` | `OpenAIProvider` (alt base_url) | `deepseek-chat` |

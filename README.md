@@ -12,12 +12,13 @@ podbook build <url>
 
 | Component | Detail |
 |---|---|
-| OS | Fedora Linux 44 (x86_64) |
-| Python | 3.12+ (developed on 3.14.4) |
+| OS | Fedora Linux 44 (x86_64) · macOS (Apple Silicon) |
+| Python | 3.12+ (developed on 3.14.x) |
 | Package manager | uv |
 | Transcription | faster-whisper (CTranslate2), base model |
-| Local LLM | Ollama — `gemma4:e2b` (Gemma 4B) |
+| Local LLM | Ollama — `gemma4:e2b` (7.2 GB); requires `--model gemma4:e2b` flag |
 | Cloud LLMs | Claude Haiku 4.5, GPT-4o-mini, DeepSeek |
+| System deps | `ffmpeg` — required for audio download/transcription fallback |
 
 ## Flow
 
@@ -33,7 +34,7 @@ flowchart TD
     D --> H{transcript on page?}
     E --> I{audio enclosure?}
 
-    G -->|yes| J[download JSON3 subs]
+    G -->|yes| J[download VTT subs]
     G -->|no| K[download audio]
 
     H -->|yes| L[extract text]
@@ -68,13 +69,25 @@ flowchart TD
 
 ```bash
 uv sync
-```
-
-For AI passes, install the provider you want:
-
-```bash
 uv sync --extra anthropic   # Claude (recommended — includes prompt caching)
 uv sync --extra openai      # OpenAI or DeepSeek
+uv sync --extra dev         # adds pytest
+```
+
+**System dependencies** (required for audio download/transcription fallback):
+
+```bash
+# macOS
+brew install ffmpeg ollama
+
+# Fedora
+sudo dnf install ffmpeg
+```
+
+**Ollama model** (if using local LLM):
+
+```bash
+ollama pull gemma4:e2b
 ```
 
 ## Usage
@@ -90,12 +103,13 @@ podbook build ./episode.mp3
 ### AI-enhanced build
 
 ```bash
-# Clean up filler words and add chapters/summary using local Ollama (default)
-podbook build --cleanup --enrich <url>
+# Clean up filler words and add chapters/summary (Ollama, default provider)
+# Ollama defaults to llama3.2 — override with --model for your local model
+podbook build --cleanup --enrich --provider ollama --model gemma4:e2b <url>
 
 # Label speakers in the transcript (auto-enabled with --cleanup)
 podbook build --speakers <url>
-podbook build --speakers --cleanup <url>     # speaker labels + cleanup
+podbook build --speakers --cleanup --provider ollama --model gemma4:e2b <url>
 
 # When --cleanup is used, a *-raw.md is saved alongside the cleaned *.md
 # so you can compare pre- and post-cleanup output.
@@ -111,9 +125,6 @@ podbook build --cleanup --enrich --provider deepseek <url>
 
 # Add a glossary of key terms
 podbook build --enrich --glossary --provider claude <url>
-
-# Override the default model (e.g., for local Ollama)
-podbook build --cleanup --enrich --model gemma4:e2b <url>
 ```
 
 ### Estimate costs before running
@@ -164,7 +175,7 @@ podbook build --force-transcribe <url>
 
 | `--provider` | API key env var | Notes |
 |---|---|---|
-| `ollama` | — | Local, free. Default. Requires Ollama running. |
+| `ollama` | — | Local, free. Default. Requires Ollama running. Use `--model` to select your pulled model (e.g. `--model gemma4:e2b`). |
 | `claude` | `ANTHROPIC_API_KEY` | Prompt caching reduces cost on long podcasts. |
 | `openai` | `OPENAI_API_KEY` | GPT-4o-mini default. |
 | `deepseek` | `DEEPSEEK_API_KEY` | OpenAI-compatible API, competitive pricing. |
@@ -173,8 +184,9 @@ podbook build --force-transcribe <url>
 
 | Tool | Purpose |
 |---|---|
-| `yt-dlp` | YouTube audio + subtitle extraction |
+| `yt-dlp` | YouTube audio + subtitle extraction (VTT format with rolling-caption deduplication) |
 | `faster-whisper` | Local transcription fallback (CTranslate2, base model) |
+| `ffmpeg` | Audio conversion for transcription fallback (system dep, not pip) |
 | `ebooklib` | EPUB generation |
 | `markdown` | Markdown → HTML conversion for EPUB chapters |
 | `typer` | CLI framework |
