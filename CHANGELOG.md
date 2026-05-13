@@ -16,6 +16,30 @@
 
 ### Added
 
+- **Structured logging** (`podbook/logging.py`)
+  - `output/runs.jsonl` — pipeline run log (timestamp, source, duration, tokens, status, output paths).
+  - `output/llm_calls.jsonl` — LLM call log (timestamp, provider/model, purpose, token counts, latency_ms, prompt/response lengths).
+  - All LLM providers now time API calls and emit log entries automatically.
+  - Pipeline logs a success entry on completion.
+
+- **`purpose` parameter on `LLMProvider.generate()`**
+  - Each AI pass call site passes `purpose=` (speakers, cleanup, chapters, takeaways, summary, glossary) for log traceability.
+
+- **`.env` auto-loading** via `python-dotenv`
+  - `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL`, and other API keys are loaded automatically — no manual `export` needed.
+
+- **DeepSeek model from environment**
+  - `DEEPSEEK_MODEL` in `.env` overrides the default model (`deepseek-chat`). Base URL set to `https://api.deepseek.com`.
+
+- **Provider suffix in output filenames**
+  - Markdown and EPUB files are named `{title}-{provider}.md` and `{title}-{provider}.epub` for easy differentiation between runs with different LLMs.
+
+- **OpenAI provider `extra_body` support**
+  - Constructor accepts optional `extra_body` dict for provider-specific API parameters (e.g., DeepSeek thinking mode).
+
+- **`examples/` directory**
+  - Reference comparison: raw VTT, transcript JSON, gemma4 vs deepseek outputs, and README with full prompt catalog and model comparison data.
+
 - **macOS dev environment support**
   - Verified end-to-end on macOS (Apple Silicon, Darwin). Install path: `brew install ollama ffmpeg`, then `ollama pull gemma4:e2b`.
   - Updated `README.md` and `CLAUDE.md` with macOS setup instructions, system dep table, and correct `--provider ollama --model gemma4:e2b` flag usage.

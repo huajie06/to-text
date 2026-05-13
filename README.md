@@ -120,12 +120,25 @@ podbook build --cleanup --enrich --provider claude <url>
 # Use OpenAI
 podbook build --cleanup --enrich --provider openai --model gpt-4o-mini <url>
 
-# Use DeepSeek (requires DEEPSEEK_API_KEY)
+# Use DeepSeek (requires DEEPSEEK_API_KEY and optionally DEEPSEEK_MODEL in .env)
 podbook build --cleanup --enrich --provider deepseek <url>
 
 # Add a glossary of key terms
 podbook build --enrich --glossary --provider claude <url>
 ```
+
+### Configuration
+
+API keys are loaded automatically from `.env`. Copy `.env.example` or create your own:
+
+```bash
+DEEPSEEK_API_KEY=sk-...
+DEEPSEEK_MODEL=deepseek-v4-flash    # optional, defaults to deepseek-chat
+ANTHROPIC_API_KEY=sk-ant-...        # for --provider claude
+OPENAI_API_KEY=sk-...               # for --provider openai
+```
+
+Output filenames include the provider for differentiation across runs: `title-deepseek.md`, `title-claude.md`, etc.
 
 ### Estimate costs before running
 
@@ -178,7 +191,7 @@ podbook build --force-transcribe <url>
 | `ollama` | — | Local, free. Default. Requires Ollama running. Use `--model` to select your pulled model (e.g. `--model gemma4:e2b`). |
 | `claude` | `ANTHROPIC_API_KEY` | Prompt caching reduces cost on long podcasts. |
 | `openai` | `OPENAI_API_KEY` | GPT-4o-mini default. |
-| `deepseek` | `DEEPSEEK_API_KEY` | OpenAI-compatible API, competitive pricing. |
+| `deepseek` | `DEEPSEEK_API_KEY` | OpenAI-compatible API. Model from `DEEPSEEK_MODEL` in `.env`. |
 
 ## Dependencies
 
@@ -194,6 +207,7 @@ podbook build --force-transcribe <url>
 | `beautifulsoup4` | Podcast webpage parsing |
 | `feedparser` | RSS feed parsing |
 | `pydantic` | Immutable data models |
+| `python-dotenv` | Auto-load API keys from `.env` file |
 
 ## Project Structure
 
@@ -202,6 +216,7 @@ podbook/
 ├── cli/main.py              CLI entry point (build, transcript, epub, cache)
 ├── models.py                Canonical data models (Segment, Transcript, TokenUsage)
 ├── pipeline.py              End-to-end orchestration
+├── logging.py               Structured logging (runs.jsonl + llm_calls.jsonl)
 ├── sources/
 │   ├── youtube.py           YouTube subtitle + audio extraction
 │   ├── webpage.py           Podcast page parsing
