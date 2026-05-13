@@ -75,6 +75,7 @@ def cleanup_transcript(
             prompt,
             system=CLEANUP_SYSTEM,
             cached_prefix=cached_prefix,
+            purpose="cleanup",
         )
         total_usage.input_tokens += usage.input_tokens
         total_usage.output_tokens += usage.output_tokens

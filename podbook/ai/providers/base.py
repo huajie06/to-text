@@ -30,11 +30,13 @@ class LLMProvider(ABC):
         system: str | None = None,
         *,
         cached_prefix: str | None = None,
+        purpose: str = "",
     ) -> tuple[str, TokenUsage]:
         """Generate a response. Returns (text, token_usage).
 
         cached_prefix: stable text preceding the variable prompt.
         Claude caches this block; other providers prepend it to prompt.
+        purpose: label for logging (speakers, cleanup, chapters, etc.)
         """
         ...
 

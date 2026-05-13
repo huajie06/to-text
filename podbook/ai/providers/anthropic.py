@@ -24,7 +24,9 @@ class ClaudeProvider(LLMProvider):
         system: str | None = None,
         *,
         cached_prefix: str | None = None,
+        purpose: str = "",
     ) -> tuple[str, TokenUsage]:
+        import time as _time
         import anthropic
 
         client = anthropic.Anthropic(api_key=self.api_key)
@@ -58,11 +60,13 @@ class ClaudeProvider(LLMProvider):
         if system_param is not None:
             kwargs["system"] = system_param
 
+        t0 = _time.monotonic()
         response = client.messages.create(
             model=self.model,
             max_tokens=4096,
             **kwargs,
         )
+        latency_ms = (_time.monotonic() - t0) * 1000
 
         content = response.content[0].text if response.content else ""
         usage = TokenUsage(
@@ -70,5 +74,20 @@ class ClaudeProvider(LLMProvider):
             output_tokens=response.usage.output_tokens,
             cache_write_tokens=getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
             cache_read_tokens=getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+        )
+
+        from podbook.logging import log_llm_call
+        log_llm_call(
+            provider=self.name,
+            model=self.model,
+            purpose=purpose,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            latency_ms=latency_ms,
+            prompt_length=len(prompt),
+            system_length=len(system) if system else 0,
+            response_length=len(content),
         )
         return content, usage

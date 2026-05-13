@@ -15,6 +15,7 @@ dependencies = [
     "jinja2>=3.1",
     "markdown>=3.7",
     "ebooklib>=0.18",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.optional-dependencies]

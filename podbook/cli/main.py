@@ -5,6 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import typer
 from rich.console import Console
 

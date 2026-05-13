@@ -253,6 +253,7 @@ def run_pipeline(
     from podbook.ebook.markdown import generate_markdown
 
     slug = _slugify(transcript.source_title or "transcript")
+    slug = f"{slug}-{provider}"
 
     # Apply cleaned segments to transcript for final output
     if cleaned_segments:
@@ -290,6 +291,29 @@ def run_pipeline(
     console.print(f"[bold green]Done![/] EPUB: {epub_path}")
     if token_spent > 0:
         console.print(f"  Total LLM tokens: {token_spent:,}")
+
+    # Log the completed pipeline run
+    md_path = output_dir / f"{slug}.md"
+    from podbook.logging import log_pipeline_run
+    log_pipeline_run(
+        source=source,
+        source_type=source_type.value if hasattr(source_type, 'value') else str(source_type),
+        source_title=transcript.source_title or "",
+        channel=transcript.channel or "",
+        duration_seconds=_total_duration(transcript),
+        segment_count=len(transcript.segments),
+        content_segment_count=len(transcript.segments),
+        cleanup=cleanup or False,
+        enrich=enrich or False,
+        glossary=glossary or False,
+        speakers=label_speakers or cleanup or False,
+        provider=provider or "",
+        model=(llm.model if llm else model) or "",
+        total_tokens=token_spent,
+        status="success",
+        output_epub=str(epub_path),
+        output_md=str(md_path),
+    )
 
     return epub_path
 
@@ -621,9 +645,9 @@ def _get_provider(provider: str, model: str | None):
         import os
 
         return OpenAIProvider(
-            model=model or "deepseek-chat",
+            model=model or os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
             api_key=os.environ.get("DEEPSEEK_API_KEY"),
-            base_url="https://api.deepseek.com/v1",
+            base_url="https://api.deepseek.com",
         )
 
     raise ValueError(f"Unknown provider: {provider!r}. Use: ollama, openai, claude, deepseek")

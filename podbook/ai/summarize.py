@@ -96,6 +96,7 @@ def generate_chapters(
             CHAPTER_SUFFIX,
             system=CHAPTER_SYSTEM,
             cached_prefix=cached_prefix,
+            purpose="chapters",
         )
         total_usage.input_tokens += usage.input_tokens
         total_usage.output_tokens += usage.output_tokens
@@ -122,6 +123,7 @@ def generate_takeaways(
         TAKEAWAY_SUFFIX,
         system=TAKEAWAY_SYSTEM,
         cached_prefix=cached_prefix,
+        purpose="takeaways",
     )
 
     takeaways = [
@@ -144,6 +146,7 @@ def generate_summary(
         SUMMARY_SUFFIX,
         system=SUMMARY_SYSTEM,
         cached_prefix=cached_prefix,
+        purpose="summary",
     )
     return text.strip(), usage
 
@@ -160,6 +163,7 @@ def generate_glossary(
         GLOSSARY_SUFFIX,
         system=GLOSSARY_SYSTEM,
         cached_prefix=cached_prefix,
+        purpose="glossary",
     )
 
     glossary: dict[str, str] = {}

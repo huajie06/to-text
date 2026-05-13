@@ -216,7 +216,7 @@ def llm_identify_speakers(
     and the token usage for the call.
     """
     prompt = _build_speaker_prompt(sample, transcript)
-    response_text, usage = provider.generate(prompt, system=SPEAKER_SYSTEM)
+    response_text, usage = provider.generate(prompt, system=SPEAKER_SYSTEM, purpose="speakers")
 
     try:
         json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
