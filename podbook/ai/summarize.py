@@ -49,19 +49,6 @@ Write in clear, journalistic prose. No preamble."""
 
 SUMMARY_SUFFIX = "Summarize this podcast episode."
 
-GLOSSARY_SYSTEM = """You extract key terms, concepts, and acronyms from podcast transcripts and write brief definitions based on how they are used in context.
-
-Output one term per line:
-TERM: brief 1-sentence definition
-
-Include:
-- Technical terms or jargon
-- Acronyms and abbreviations
-- People mentioned with significant roles
-- Companies or products discussed"""
-
-GLOSSARY_SUFFIX = "Extract key terms and concepts from this transcript that would benefit from glossary entries."
-
 
 def _transcript_prefix(transcript: Transcript, context: str) -> str:
     """Build the stable cached prefix: context + full transcript text."""
@@ -151,24 +138,3 @@ def generate_summary(
     return text.strip(), usage
 
 
-def generate_glossary(
-    transcript: Transcript,
-    provider: LLMProvider,
-) -> tuple[dict[str, str], TokenUsage]:
-    """Generate a glossary of key terms from the transcript."""
-    context = build_context(transcript)
-    cached_prefix = _transcript_prefix(transcript, context)
-
-    text, usage = provider.generate(
-        GLOSSARY_SUFFIX,
-        system=GLOSSARY_SYSTEM,
-        cached_prefix=cached_prefix,
-        purpose="glossary",
-    )
-
-    glossary: dict[str, str] = {}
-    for line in text.strip().split("\n"):
-        if ":" in line:
-            term, _, definition = line.partition(":")
-            glossary[term.strip()] = definition.strip()
-    return glossary, usage

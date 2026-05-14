@@ -56,10 +56,6 @@ def build(
         bool,
         typer.Option("--enrich", help="Run LLM enrichment (chapters, takeaways, summary)."),
     ] = False,
-    glossary: Annotated[
-        bool,
-        typer.Option("--glossary", help="Generate a glossary of key terms (requires --enrich)."),
-    ] = False,
     provider: Annotated[
         str,
         typer.Option("--provider", help=f"LLM provider: {_PROVIDERS}."),
@@ -84,6 +80,13 @@ def build(
             help="Label speakers in the transcript (auto-enabled with --cleanup).",
         ),
     ] = False,
+    force_diarize: Annotated[
+        bool,
+        typer.Option(
+            "--force-diarize",
+            help="Download audio and run pyannote diarization even when subtitles are available. Requires HUGGINGFACE_TOKEN.",
+        ),
+    ] = False,
 ) -> None:
     """Build an ebook from a podcast URL or local audio/video file."""
     from podbook.pipeline import run_pipeline
@@ -102,11 +105,11 @@ def build(
         force_transcribe=force_transcribe,
         cleanup=cleanup,
         enrich=enrich,
-        glossary=glossary,
         provider=provider,
         model=model,
         fraction=fraction,
         label_speakers=speakers,
+        force_diarize=force_diarize,
     )
 
 

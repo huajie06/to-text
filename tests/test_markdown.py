@@ -57,18 +57,6 @@ class TestGenerateMarkdown:
         assert "# Final Summary" in md
         assert "This was a great episode." in md
 
-    def test_glossary_section(self):
-        tr = make_transcript()
-        md = generate_markdown(tr, glossary={"API": "Application Programming Interface", "ML": "Machine Learning"})
-        assert "# Glossary" in md
-        assert "**API**" in md
-        assert "**ML**" in md
-
-    def test_glossary_sorted_alphabetically(self):
-        tr = make_transcript()
-        md = generate_markdown(tr, glossary={"Zebra": "def z", "Alpha": "def a"})
-        assert md.index("**Alpha**") < md.index("**Zebra**")
-
     def test_speaker_labels(self):
         segs = [
             Segment(start=0.0, end=5.0, speaker="Host", text="Hello, welcome."),

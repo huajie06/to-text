@@ -17,6 +17,9 @@ SPEAKER_SYSTEM = """You are an expert at identifying speakers in podcast transcr
 Analyze the provided transcript excerpts and metadata to determine who is speaking.
 Return ONLY valid JSON — no preamble, no commentary."""
 
+MAP_SPEAKER_SYSTEM = """You identify podcast speakers from transcript samples and show metadata.
+Return ONLY valid JSON — no preamble, no commentary."""
+
 
 @dataclass
 class UtteranceGroup:
@@ -349,6 +352,73 @@ def expand_labels(
         result.append(seg.model_copy(update={"speaker": speaker}))
 
     return result
+
+
+def map_speaker_ids(
+    transcript: Transcript,
+    provider: LLMProvider,
+) -> tuple[Transcript, TokenUsage]:
+    """Map diarization speaker IDs (SPEAKER_00, SPEAKER_01, ...) to real names.
+
+    Picks the longest utterance per speaker ID, sends them to the LLM with
+    podcast metadata, and applies the returned name mapping to all segments.
+    Falls back to Host / Guest 1 / Guest 2 when the LLM can't identify names.
+    """
+    segments = transcript.segments
+
+    longest: dict[str, str] = {}
+    for seg in segments:
+        if seg.speaker and seg.speaker.startswith("SPEAKER_"):
+            if len(seg.text) > len(longest.get(seg.speaker, "")):
+                longest[seg.speaker] = seg.text
+
+    if not longest:
+        return transcript, TokenUsage()
+
+    speaker_ids = sorted(longest.keys())
+
+    context_parts: list[str] = []
+    if transcript.source_title:
+        context_parts.append(f"Title: {transcript.source_title}")
+    if transcript.channel:
+        context_parts.append(f"Channel/Show: {transcript.channel}")
+    if transcript.description:
+        context_parts.append(f"Description: {transcript.description[:300]}")
+
+    excerpts = "\n".join(f"{spk}: {longest[spk][:400]}" for spk in speaker_ids)
+    context_block = "\n".join(context_parts) if context_parts else "No metadata available"
+
+    prompt = f"""{context_block}
+
+Longest utterance per speaker ID:
+{excerpts}
+
+Map each speaker ID to a real name using the podcast metadata.
+If a name cannot be confidently determined, use "Host" for the first speaker and "Guest" for others.
+Return ONLY a JSON object like:
+{{"SPEAKER_00": "Joe Rogan", "SPEAKER_01": "Theo Von"}}"""
+
+    response_text, usage = provider.generate(prompt, system=MAP_SPEAKER_SYSTEM)
+
+    name_map: dict[str, str] = {}
+    try:
+        json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
+        if json_match:
+            name_map = json.loads(json_match.group())
+    except json.JSONDecodeError:
+        pass
+
+    if not name_map:
+        name_map = {
+            spk: ("Host" if i == 0 else f"Guest {i}")
+            for i, spk in enumerate(speaker_ids)
+        }
+
+    labeled = [
+        seg.model_copy(update={"speaker": name_map.get(seg.speaker, seg.speaker)})
+        for seg in segments
+    ]
+    return transcript.model_copy(update={"segments": labeled}), usage
 
 
 def label_speakers(

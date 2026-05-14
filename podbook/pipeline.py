@@ -24,11 +24,11 @@ def run_pipeline(
     force_transcribe: bool = False,
     cleanup: bool = False,
     enrich: bool = False,
-    glossary: bool = False,
     provider: str = "ollama",
     model: str | None = None,
     fraction: float | None = None,
     label_speakers: bool = False,
+    force_diarize: bool = False,
 ) -> Path | None:
     """Run the full PodBook pipeline.
 
@@ -132,17 +132,54 @@ def run_pipeline(
     speaker_labeling_enabled = label_speakers or cleanup
 
     if speaker_labeling_enabled:
+        console.print("[dim]──────────────────────────────────────────[/]")
         if label_speakers:
-            console.print("[dim]──────────────────────────────────────────[/]")
             console.print("[bold]Phase 1.5:[/] Speaker labeling...")
         else:
-            console.print("[dim]──────────────────────────────────────────[/]")
             console.print("[bold]Phase 1.5:[/] Speaker labeling [dim](auto-enabled with --cleanup)[/]")
 
-        from podbook.ai.speakers import label_speakers as do_speaker_label
-
         speaker_llm = _get_provider(provider, model)
-        transcript, speaker_usage = do_speaker_label(transcript, speaker_llm)
+        speaker_usage = None
+
+        # Prefer acoustic diarization when audio is available or forced
+        audio_files = list(source_dir.glob("*.wav")) + list(source_dir.glob("*.16k.wav"))
+        has_audio = bool(audio_files)
+
+        if force_diarize and not has_audio:
+            # VTT path: download audio purely for diarization
+            console.print("  [dim]--force-diarize: downloading audio for diarization...[/]")
+            from podbook.sources.youtube import download_audio
+            audio_path = download_audio(source, source_dir)
+            audio_files = [audio_path]
+            has_audio = True
+
+        if has_audio:
+            import os
+            hf_token = os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HF_TOKEN", "")
+            if not hf_token:
+                console.print(
+                    "  [yellow]Warning:[/] HUGGINGFACE_TOKEN not set — "
+                    "falling back to LLM-based speaker labeling."
+                )
+                has_audio = False
+
+        if has_audio:
+            from podbook.transcript.diarize import assign_speakers, diarize_audio
+            from podbook.ai.speakers import map_speaker_ids
+
+            console.print("  Running pyannote diarization [dim](CPU; uses cache if available)[/]...")
+            diarization = diarize_audio(audio_files[0], hf_token, source_dir=source_dir)
+            console.print(f"  [green]✓[/] {len(diarization)} diarization segments")
+
+            labeled_segs = assign_speakers(transcript.segments, diarization)
+            transcript = transcript.model_copy(update={"segments": labeled_segs})
+
+            console.print("  Mapping speaker IDs to names...")
+            transcript, speaker_usage = map_speaker_ids(transcript, speaker_llm)
+        else:
+            from podbook.ai.speakers import label_speakers as do_speaker_label
+            transcript, speaker_usage = do_speaker_label(transcript, speaker_llm)
+
         token_spent += speaker_usage.total
 
         speakers_seen: set[str] = set()
@@ -170,7 +207,6 @@ def run_pipeline(
     chapters = None
     takeaways = None
     summary = None
-    glossary_data: dict[str, str] | None = None
     cleaned_segments = None
 
     if cleanup and llm is not None:
@@ -230,17 +266,6 @@ def run_pipeline(
                 )
                 hit_cap = max_tokens and token_spent >= max_tokens
 
-            if glossary and not hit_cap:
-                console.print("  [bold]Pass 2e:[/] Generating glossary...")
-                from podbook.ai.summarize import generate_glossary
-
-                glossary_data, usage = generate_glossary(source_transcript, llm)
-                token_spent += usage.total
-                console.print(
-                    f"  [green]✓[/] {len(glossary_data)} glossary terms "
-                    f"({usage.input_tokens:,} in / {usage.output_tokens:,} out)"
-                )
-
         if token_spent > 0:
             console.print(f"  [bold]Total tokens spent:[/] {token_spent:,}")
             if max_tokens:
@@ -264,7 +289,6 @@ def run_pipeline(
         chapters=chapters,
         key_takeaways=takeaways,
         final_summary=summary,
-        glossary=glossary_data,
     )
     md_path = output_dir / f"{slug}.md"
     md_path.write_text(md_text)
