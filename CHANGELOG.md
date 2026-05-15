@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-05-14
+
+### Added
+
+- **YouTube always uses faster-whisper** (`podbook/sources/youtube.py`, `podbook/pipeline.py`)
+  - YouTube subtitles no longer used as a transcript source. `extract_youtube()` accepts `subs=False` to skip subtitle download. Pipeline always downloads audio + whisper-transcribes.
+  - Metadata (title, channel, description) still fetched via `yt-dlp --dump-json`.
+
+- **Phase metrics** (`podbook/pipeline.py`)
+  - `PhaseMetric` dataclass tracks `(name, duration_s, input_tokens, output_tokens, items)` per pipeline phase.
+  - All phases (transcript extraction, preprocessing, speaker labeling, cleanup, chapters, takeaways, summary, markdown, EPUB) timed with `time.monotonic()`.
+  - Rich summary table printed at end of run showing duration + token counts per phase.
+  - Phase metrics serialized to `output/runs.jsonl`.
+
+- **Acoustic speaker diarization** (`podbook/transcript/diarize.py`)
+  - Updated to pyannote.audio 4.x API: `token=` parameter instead of `use_auth_token=`, `serialize()` method instead of `itertracks()`.
+  - `assign_speakers()` rewritten with **any-overlap alignment**: checks each diarization speaker independently for any time overlap with each whisper segment. Single match → tag, multiple matches → combined label (`SPEAKER_00_SPEAKER_01`), no match → longest-duration fallback.
+  - Replaces old max-overlap strategy which lost short-interjection speakers.
+
+- **Combined speaker label handling** (`podbook/ai/speakers.py`)
+  - `_parse_speaker_ids()` extracts individual IDs from both simple (`SPEAKER_00`) and combined (`SPEAKER_00_SPEAKER_01`) labels.
+  - `_resolve_speaker_label()` maps combined labels through name map → combined names (`Joe_Rogan_Theo_Von`).
+
+- **Standalone merge script** (`scripts/merge_diarization.py`)
+  - Reads `transcript.json` + `diarization.json` from a source directory, applies any-overlap alignment, writes `diarization_transcript.json`.
+
+- **Documentation**
+  - `docs/pipeline-details.md` — comprehensive pipeline reference: transcription strategy, diarization setup, phase metrics, LLM providers, auth setup, output layout, source map.
+  - `plan-idea/diarization-merge-enhancements.md` — three enhancement paths: boundary splitting, embedding clustering, VAD segmentation.
+  - `examples/example1/` and `examples/example2/` — reorganized output references with updated README index.
+  - `examples/README.md` updated with example2 (diarization) details and metrics table.
+
+- **Dependency extras**
+  - `uv sync --extra diarize` for pyannote.audio.
+  - `uv sync --extra openai` for DeepSeek/OpenAI provider (was missing from install instructions).
+
+### Changed
+
+- **README.md**: flow diagram updated (YouTube → direct whisper, diarization path added), philosophy updated to "whisper-first", new "Speaker Diarization" section with merge logic and potential enhancements.
+- **AGENTS.md**: YouTube subtitle preference → always whisper, diarization merge logic, potential enhancements, expanded output layout, updated known issues with diarization notes.
+
+---
+
 ## 2026-05-12
 
 ### Fixed

@@ -354,6 +354,31 @@ def expand_labels(
     return result
 
 
+def _parse_speaker_ids(segments: list[Segment]) -> set[str]:
+    """Extract unique individual speaker IDs from segments, handling combined labels."""
+    seen: set[str] = set()
+    for seg in segments:
+        if not seg.speaker:
+            continue
+        for part in seg.speaker.split("_"):
+            if part.startswith("SPEAKER"):
+                seen.add(part)
+    return seen
+
+
+def _resolve_speaker_label(label: str | None, name_map: dict[str, str]) -> str | None:
+    """Map a speaker label through name_map, handling combined labels.
+
+    SPEAKER_00          → Joe Rogan
+    SPEAKER_00_SPEAKER_01 → Joe_Rogan_Theo_Von
+    """
+    if not label:
+        return label
+    parts = label.split("_")
+    mapped = [name_map.get(p, p) for p in parts]
+    return "_".join(mapped)
+
+
 def map_speaker_ids(
     transcript: Transcript,
     provider: LLMProvider,
@@ -362,20 +387,30 @@ def map_speaker_ids(
 
     Picks the longest utterance per speaker ID, sends them to the LLM with
     podcast metadata, and applies the returned name mapping to all segments.
+    Handles combined labels like SPEAKER_00_SPEAKER_01 — both constituent IDs
+    are sent to the LLM, and the combined label is resolved to a combined name
+    (e.g. Joe_Rogan_Theo_Von).
+
     Falls back to Host / Guest 1 / Guest 2 when the LLM can't identify names.
     """
     segments = transcript.segments
 
-    longest: dict[str, str] = {}
-    for seg in segments:
-        if seg.speaker and seg.speaker.startswith("SPEAKER_"):
-            if len(seg.text) > len(longest.get(seg.speaker, "")):
-                longest[seg.speaker] = seg.text
-
-    if not longest:
+    # Collect unique individual speaker IDs (handles combined labels)
+    all_ids = _parse_speaker_ids(segments)
+    if not all_ids:
         return transcript, TokenUsage()
 
-    speaker_ids = sorted(longest.keys())
+    speaker_ids = sorted(all_ids)
+
+    # Pick longest utterance per individual speaker ID
+    longest: dict[str, str] = {}
+    for seg in segments:
+        if not seg.speaker:
+            continue
+        for part in seg.speaker.split("_"):
+            if part in all_ids:
+                if len(seg.text) > len(longest.get(part, "")):
+                    longest[part] = seg.text
 
     context_parts: list[str] = []
     if transcript.source_title:
@@ -415,7 +450,7 @@ Return ONLY a JSON object like:
         }
 
     labeled = [
-        seg.model_copy(update={"speaker": name_map.get(seg.speaker, seg.speaker)})
+        seg.model_copy(update={"speaker": _resolve_speaker_label(seg.speaker, name_map)})
         for seg in segments
     ]
     return transcript.model_copy(update={"segments": labeled}), usage

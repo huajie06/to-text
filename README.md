@@ -2,7 +2,7 @@
 
 Convert podcasts and videos into readable EPUB ebooks, optimized for Boox e-readers and iPad reading apps.
 
-**Philosophy:** transcript-first, AI-enhanced — not AI-first transcription.
+**Philosophy:** whisper-first, AI-enhanced — local transcription preferred over subtitles for consistent quality.
 
 ```text
 podbook build <url>
@@ -25,40 +25,40 @@ podbook build <url>
 ```mermaid
 flowchart TD
     A[INPUT] --> B{source detection}
-    B -->|YouTube| C[yt-dlp]
+    B -->|YouTube| C[yt-dlp metadata + audio]
     B -->|Podcast Page| D[requests + BeautifulSoup]
     B -->|RSS Feed| E[feedparser]
     B -->|Local File| F[file metadata]
 
-    C --> G{subtitles available?}
+    C --> K[download audio]
     D --> H{transcript on page?}
     E --> I{audio enclosure?}
-
-    G -->|yes| J[download VTT subs]
-    G -->|no| K[download audio]
 
     H -->|yes| L[extract text]
     H -->|no| M[extract audio URL]
 
-    J --> O[normalize + preprocess]
     K --> N[faster-whisper transcription]
     M --> N
     I --> N
     F --> N
 
-    N --> O
+    N --> O[normalize + preprocess]
     L --> O
 
-    O --> SP{--speakers or --cleanup?}
-    SP -->|yes| SL[speaker labeling LLM call]
+    O --> SP{speaker labeling?}
+    SP -->|--force-diarize| DZ[pyannote diarization]
+    SP -->|--speakers or --cleanup| SL[LLM-only labeling]
     SP -->|no| P
-    SL --> P{AI passes?}
+
+    DZ --> AS[assign_speakers any-overlap merge]
+    AS --> MP[map_speaker_ids LLM → names]
+    SL --> P
+
+    MP --> P{AI passes?}
     P -->|--cleanup| Q[transcript cleanup]
     P -->|--enrich| R[chapters + takeaways + summary]
-    P -->|--glossary| R2[glossary]
     Q --> S[markdown generation]
     R --> S
-    R2 --> S
     P -->|skip| S
 
     S --> T[EPUB generation]
@@ -71,6 +71,7 @@ flowchart TD
 uv sync
 uv sync --extra anthropic   # Claude (recommended — includes prompt caching)
 uv sync --extra openai      # OpenAI or DeepSeek
+uv sync --extra diarize     # pyannote.audio speaker diarization (--force-diarize)
 uv sync --extra dev         # adds pytest
 ```
 
@@ -180,9 +181,52 @@ podbook build --max-tokens 50000 --cleanup --enrich <url>
 ### Force local transcription
 
 ```bash
-# Skip subtitle check, always transcribe with faster-whisper
+# Skip cached transcript, always re-download audio + re-transcribe with faster-whisper
 podbook build --force-transcribe <url>
 ```
+
+### Speaker diarization (acoustic)
+
+```bash
+# Use pyannote.audio for acoustic speaker diarization instead of LLM-only labeling
+podbook build --force-diarize --cleanup --enrich <url>
+```
+
+Requires `uv sync --extra diarize` and `HUGGINGFACE_TOKEN` or `HF_TOKEN` in `.env` with access to gated repos.
+
+## Speaker Diarization
+
+Two speaker labeling paths exist, controlled by `--force-diarize`:
+
+| Path | Trigger | Method | Quality |
+|---|---|---|---|
+| LLM-only | `--speakers` or `--cleanup` (default) | One LLM call on utterance sample + heuristic propagation | Good — works on text alone |
+| Acoustic | `--force-diarize` | pyannote.audio + any-overlap merge + LLM name mapping | Better on clean audio, noisy on short interjections |
+
+### Diarization → transcript merge strategy
+
+When `--force-diarize` is used, pyannote produces `(start, end, SPEAKER_XX)` windows. These are merged into whisper segments via `assign_speakers()` in `diarize.py`:
+
+1. **Group** diarization windows by speaker ID
+2. For each whisper segment, check for **any time overlap** with each speaker independently
+3. **Single match** → tag with that speaker ID
+4. **Multiple matches** → combined label (e.g. `SPEAKER_00_SPEAKER_01`)
+5. **No match** → fallback to the longest-duration speaker
+
+This **any-overlap** approach replaces the previous max-overlap strategy. Max-overlap always selected the dominant speaker because pyannote produces finer-grained windows (as short as 0.01s) than whisper segments (~1-3s). The any-overlap approach preserves short interjections from secondary speakers by acknowledging when a segment overlaps both speakers.
+
+Combined labels are later resolved through the LLM name mapper (`map_speaker_ids` in `speakers.py`):
+- `SPEAKER_00` → `Joe Rogan`
+- `SPEAKER_01` → `Theo Von`
+- `SPEAKER_00_SPEAKER_01` → `Joe_Rogan_Theo_Von`
+
+### Potential enhancements
+
+- **Whisper segmentation at diarization boundaries**: Split whisper segments at diarization window boundaries for cleaner speaker attribution instead of combined labels.
+- **Voice-activity-based segmentation**: Use VAD to produce whisper segments that align with speaker turns, avoiding the granularity mismatch.
+- **Embedding-based speaker clustering**: Use d-vector embeddings from pyannote to cluster whisper segments by speaker similarity, sidestepping time-alignment entirely.
+- **Streaming diarization**: Process audio in chunks for real-time/low-latency workflows.
+- **Speaker-conditional cleanup**: Route segments to separate LLM cleanup calls per speaker for consistent voice/style.
 
 ## Providers
 
@@ -198,7 +242,8 @@ podbook build --force-transcribe <url>
 | Tool | Purpose |
 |---|---|
 | `yt-dlp` | YouTube audio + subtitle extraction (VTT format with rolling-caption deduplication) |
-| `faster-whisper` | Local transcription fallback (CTranslate2, base model) |
+| `faster-whisper` | Local transcription (CTranslate2, base model) |
+| `pyannote.audio` | Acoustic speaker diarization (optional, via `--force-diarize`) |
 | `ffmpeg` | Audio conversion for transcription fallback (system dep, not pip) |
 | `ebooklib` | EPUB generation |
 | `markdown` | Markdown → HTML conversion for EPUB chapters |
@@ -226,7 +271,8 @@ podbook/
 │   ├── whisper.py           faster-whisper transcription
 │   ├── normalize.py         Segment normalization
 │   ├── preprocess.py        Ad/promo/filler classification + filtering
-│   └── chunking.py          Sentence-boundary chunking for LLM
+│   ├── chunking.py          Sentence-boundary chunking for LLM
+│   └── diarize.py           pyannote speaker diarization + any-overlap merge
 ├── ai/
 │   ├── providers/
 │   │   ├── base.py          LLMProvider ABC (cached_prefix interface)

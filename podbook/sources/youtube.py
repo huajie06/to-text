@@ -10,7 +10,7 @@ from podbook.models import Segment, Transcript
 from podbook.transcript.subtitles import parse_vtt
 
 
-def extract_youtube(url: str, cache_dir: Path) -> Transcript:
+def extract_youtube(url: str, cache_dir: Path, subs: bool = True) -> Transcript:
     """Extract transcript from a YouTube URL.
 
     Tries manual subtitles first, then auto-generated, then falls back
@@ -24,8 +24,7 @@ def extract_youtube(url: str, cache_dir: Path) -> Transcript:
     channel = info.get("uploader") or info.get("channel")
     tags = info.get("tags")
 
-    # Try subtitles first
-    segments = _download_subtitles(url, cache_dir)
+    segments = _download_subtitles(url, cache_dir) if subs else None
     return Transcript(
         source_url=url,
         source_title=title,

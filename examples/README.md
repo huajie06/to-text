@@ -1,8 +1,91 @@
-# Local vs. Cloud LLM for PodBook
+# Examples
 
-Reference: 6m32s JRE Clips video (`uAScbbOpmTI`), 165 raw segments, 392s duration.
+Reference video: [Theo Asks Joe If He Thinks Epstein is Still Alive](https://www.youtube.com/watch?v=uAScbbOpmTI) — 6m32s, JRE Clips.
 
-## Models compared
+| Example | Focus |
+|---|---|
+| [example1/](./example1) | LLM model comparison: `gemma4:e2b` vs `deepseek-v4-flash` |
+| [example2/](./example2) | Speaker diarization: pyannote + any-overlap merge |
+
+---
+
+## example2: Speaker Diarization with Any-Overlap Merge
+
+Transcript extracted via **faster-whisper** (base model, `--force-transcribe`), speakers identified via **pyannote acoustic diarization** (`pyannote/speaker-diarization-3.1`), speaker IDs merged to segments via **any-overlap alignment** with multi-speaker labels for overlap regions.
+
+**Pipeline run:** `--provider deepseek --cleanup --enrich --force-transcribe --force-diarize`
+
+### File flow
+
+```text
+YouTube URL
+  ├─ yt-dlp (metadata: title, channel, description)
+  └─ yt-dlp --extract-audio → WAV
+       └─ faster-whisper (base)
+            └─ transcript.json           ← raw whisper segments (no speakers)
+                 └─ pyannote diarization
+                      ├─ diarization.json ← (start, end, SPEAKER_XX) tuples
+                      └─ assign_speakers() any-overlap merge
+                           └─ diarization_transcript.json  ← segments tagged with speaker IDs
+                                └─ map_speaker_ids() LLM → real names
+                                     └─ cleanup + enrich → final markdown + EPUB
+```
+
+### Any-overlap merge strategy
+
+Instead of max-overlap (which loses short interjections), each segment is checked independently against each speaker's diarization windows:
+
+- Overlaps only `SPEAKER_00` → tagged `SPEAKER_00`
+- Overlaps only `SPEAKER_01` → tagged `SPEAKER_01`
+- Overlaps **both** → tagged `SPEAKER_00_SPEAKER_01` (ambiguous interjection zone)
+- Overlaps neither → defaults to longest-duration speaker
+
+### Metrics
+
+```
+                          Pipeline Metrics                           
+┏━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓
+┃ Phase                 ┃ Duration ┃ Tokens In ┃ Tokens Out ┃ Items ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩
+│ Transcript Extraction │ 0m 30s   │ -         │ -          │ 150   │
+│ Preprocessing         │ 0m 0s    │ -         │ -          │ 150   │
+│ Speaker Labeling      │ 0m 6s    │ 220       │ 513        │ 1     │
+│ Cleanup               │ 0m 11s   │ 2,163     │ 1,856      │ 3     │
+│ Chapters              │ 0m 8s    │ 1,996     │ 729        │ 4     │
+│ Takeaways             │ 0m 7s    │ 1,970     │ 568        │ 7     │
+│ Summary               │ 0m 7s    │ 1,965     │ 479        │ 1     │
+│ Markdown              │ 0m 0s    │ -         │ -          │ 1     │
+│ EPUB Generation       │ 0m 0s    │ -         │ -          │ 1     │
+│ Total                 │ 1m 13s   │           │ 12,459     │       │
+└───────────────────────┴──────────┴───────────┴────────────┴───────┘
+```
+
+### Speaker distribution
+
+| Segments | Label |
+|---|---|
+| 104 | `SPEAKER_00` (pure Joe Rogan) |
+| 46 | `SPEAKER_00_SPEAKER_01` (both — Theo interjecting during Joe's turn) |
+
+No segments were purely `SPEAKER_01` — Theo's interjections are always embedded inside Joe's longer speaking windows.
+
+### Files in this directory
+
+| File | Description |
+|---|---|
+| `transcript.json` | Raw whisper transcription (150 segments, no speakers) |
+| `diarization.json` | Pyannote diarization output (87 windows, SPEAKER_00 + SPEAKER_01) |
+| `diarization_transcript.json` | Any-overlap merged segments with speaker labels |
+| `theo-asks-joe-if-he-thinks-epstein-is-still-alive-deepseek.md` | Final cleaned + enriched markdown |
+| `theo-asks-joe-if-he-thinks-epstein-is-still-alive-deepseek.epub` | Final ebook |
+
+---
+
+## example1: Local vs. Cloud LLM
+
+Reference: same video, 165 raw segments (YouTube subtitles), 392s duration.
+
+### Models compared
 
 | | Local | Cloud |
 |---|---|---|
@@ -11,7 +94,7 @@ Reference: 6m32s JRE Clips video (`uAScbbOpmTI`), 165 raw segments, 392s duratio
 | Size | ~7.2 GB | N/A (API) |
 | Cost | Free | ~$0.005/run |
 
-## Token usage & latency
+### Token usage & latency
 
 | Pass | gemma4 in/out | deepseek in/out | gemma4 latency | deepseek latency |
 |---|---|---|---|---|
@@ -24,7 +107,7 @@ Reference: 6m32s JRE Clips video (`uAScbbOpmTI`), 165 raw segments, 392s duratio
 
 DeepSeek uses more output tokens because it produces proper, detailed output. gemma4 returns short hallucinated text. DeepSeek is 3x faster despite being a cloud API round-trip.
 
-## Quality
+### Quality
 
 | Aspect | gemma4:e2b | deepseek-v4-flash |
 |---|---|---|
@@ -34,7 +117,7 @@ DeepSeek uses more output tokens because it produces proper, detailed output. ge
 | Takeaways | 7 generic platitudes | 5 specific, accurate points with names/facts |
 | Summary | Describes events that don't exist in output | Accurate, detailed, references specific quotes |
 
-### Example: same cleanup instruction, same input transcript
+#### Example: same cleanup instruction, same input transcript
 
 **Raw transcript (ground truth):**
 > "They put him in a cell with Epstein. And Epstein got strangled. He was found guilty of killing four men."
@@ -45,14 +128,14 @@ DeepSeek uses more output tokens because it produces proper, detailed output. ge
 **deepseek-v4-flash output:**
 > "They put him in a cell with Epstein. And Epstein got strangled. Bro, he was found guilty of killing four men."
 
-## Cost
+### Cost
 
 DeepSeek v4 flash pricing (~$0.14/M input, ~$0.28/M output):
 - 6-minute video: **~$0.005**
 - 1-hour podcast (est. 10x tokens): **~$0.05**
 - 2-hour podcast (est. 20x tokens): **~$0.10**
 
-## Decision matrix
+### Decision matrix
 
 | Scenario | Recommendation |
 |---|---|
@@ -61,13 +144,13 @@ DeepSeek v4 flash pricing (~$0.14/M input, ~$0.28/M output):
 | Cleanup / enrich / final output | Cloud model required |
 | Batch processing 50+ episodes | Cloud, budget ~$2-5 total |
 
-## Root cause of gemma4:e2b failure
+### Root cause of gemma4:e2b failure
 
 The cleanup task requires the model to read ~3,000 words of messy, fragmented auto-captions (with `>>` markers, `[__]` profanity filters, timing artifacts) and restructure it into clean paragraphs while preserving every factual statement. This is a complex NLU task — it demands strong instruction-following and long-context coherence. A 7.2GB model lacks the capacity to do this reliably. It collapses into generating vague paraphrases instead of preserving the transcript's actual content.
 
 The local model works for the speaker identification task (~1,000 tokens, simple classification + JSON output) where the quality difference is minor.
 
-## Files in this directory
+### Files in this directory
 
 | File | Description |
 |---|---|

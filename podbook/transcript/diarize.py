@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from pathlib import Path
 
 from podbook.models import Segment
@@ -32,36 +33,75 @@ def diarize_audio(
 
     pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization-3.1",
-        use_auth_token=hf_token,
+        token=hf_token,
     )
-    diarization = pipeline(str(audio_path))
+    output = pipeline(str(audio_path))
+    serialized = output.serialize()
 
     result: list[tuple[float, float, str]] = [
-        (turn.start, turn.end, speaker)
-        for turn, _, speaker in diarization.itertracks(yield_label=True)
+        (turn["start"], turn["end"], turn["speaker"])
+        for turn in serialized.get("diarization", [])
     ]
     cache_path.write_text(json.dumps(result))
     return result
 
 
+def _overlaps_any(s_start: float, s_end: float, windows: list[tuple[float, float, str]]) -> bool:
+    """Check if a time range overlaps with ANY of the given windows."""
+    for w_start, w_end, _ in windows:
+        if max(0.0, min(s_end, w_end) - max(s_start, w_start)) > 0:
+            return True
+    return False
+
+
 def assign_speakers(
     segments: list[Segment],
     diarization: list[tuple[float, float, str]],
+    separator: str = "_",
 ) -> list[Segment]:
-    """Tag each segment with the diarization speaker that overlaps it most.
+    """Tag each segment with diarization speaker(s) by any-overlap alignment.
 
-    Uses maximum-overlap alignment: for each whisper/VTT segment, find the
-    diarization window (start, end, SPEAKER_XX) with the largest time overlap.
-    Segments with no overlap keep their existing speaker value.
+    For each transcript segment, checks for ANY time overlap with each
+    diarization speaker independently:
+
+    - Overlaps only one speaker  → tagged with that speaker ID
+    - Overlaps multiple speakers → combined via separator (e.g. SPEAKER_00_SPEAKER_01)
+    - Overlaps none              → falls back to the longest-duration speaker
+
+    The any-overlap approach avoids the max-overlap problem where short
+    interjections from one speaker are swallowed by the dominant speaker's
+    longer windows.
     """
+    if not diarization:
+        return segments
+
+    # Group diarization windows by speaker ID
+    by_speaker: dict[str, list[tuple[float, float, str]]] = defaultdict(list)
+    for ds, de, spk in diarization:
+        by_speaker[spk].append((ds, de, spk))
+
+    # Sort speakers by total duration (longest = fallback for unmatched)
+    speaker_duration = {
+        spk: sum(de - ds for ds, de, _ in segs)
+        for spk, segs in by_speaker.items()
+    }
+    sorted_speakers = sorted(speaker_duration, key=lambda s: -speaker_duration[s])
+    fallback = sorted_speakers[0]
+
     updated: list[Segment] = []
     for seg in segments:
-        best_speaker: str | None = None
-        best_overlap = 0.0
-        for d_start, d_end, speaker in diarization:
-            overlap = max(0.0, min(seg.end, d_end) - max(seg.start, d_start))
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best_speaker = speaker
-        updated.append(seg.model_copy(update={"speaker": best_speaker or seg.speaker}))
+        overlapping = [
+            spk for spk in sorted_speakers
+            if _overlaps_any(seg.start, seg.end, by_speaker[spk])
+        ]
+
+        if not overlapping:
+            speaker = fallback
+        elif len(overlapping) == 1:
+            speaker = overlapping[0]
+        else:
+            speaker = separator.join(overlapping)
+
+        updated.append(seg.model_copy(update={"speaker": speaker}))
+
     return updated

@@ -6,12 +6,24 @@ import json
 import hashlib
 from pathlib import Path
 
+import time
+from dataclasses import dataclass
+
 from rich.console import Console
 from rich.table import Table
 
 from podbook.models import SourceType, Transcript
 
 console = Console()
+
+
+@dataclass
+class PhaseMetric:
+    name: str
+    duration_s: float
+    input_tokens: int = 0
+    output_tokens: int = 0
+    items: int = 0
 
 
 def run_pipeline(
@@ -53,10 +65,13 @@ def run_pipeline(
         console.print("[dim]Run without --dry-run to execute the full pipeline.[/]")
         return None
 
+    metrics: list[PhaseMetric] = []
+
     # ── Phase 1: Extract transcript ──────────────────────────────
     console.print("[dim]──────────────────────────────────────────[/]")
     console.print("[bold]Phase 1:[/] Extracting transcript...")
 
+    t0 = time.monotonic()
     source_dir = _resolve_source_dir(source, output_dir)
     transcript = _extract_transcript(
         source=source,
@@ -64,6 +79,7 @@ def run_pipeline(
         source_dir=source_dir,
         force_transcribe=force_transcribe,
     )
+    phase_dur = time.monotonic() - t0
 
     if not transcript.segments:
         console.print(
@@ -83,8 +99,10 @@ def run_pipeline(
 
     # Cache the transcript as JSON
     _save_transcript_cache(source_dir, transcript)
+    metrics.append(PhaseMetric(name="Transcript Extraction", duration_s=phase_dur, items=len(transcript.segments)))
 
     # ── Preprocessing: classify + filter segments ────────────────
+    t0 = time.monotonic()
     from podbook.transcript.preprocess import (
         classify_segments,
         filter_content,
@@ -126,12 +144,15 @@ def run_pipeline(
         console.print("[bold red]Error:[/] No content segments after filtering.")
         raise SystemExit(1)
 
+    metrics.append(PhaseMetric(name="Preprocessing", duration_s=time.monotonic() - t0, items=len(transcript.segments)))
+
     # ── Phase 1.5: Speaker labeling ────────────────────────────────
     llm = None
     token_spent = 0
     speaker_labeling_enabled = label_speakers or cleanup
 
     if speaker_labeling_enabled:
+        t0 = time.monotonic()
         console.print("[dim]──────────────────────────────────────────[/]")
         if label_speakers:
             console.print("[bold]Phase 1.5:[/] Speaker labeling...")
@@ -193,6 +214,13 @@ def run_pipeline(
         console.print(
             f"  [dim]({speaker_usage.input_tokens:,} in / {speaker_usage.output_tokens:,} out)[/]"
         )
+        metrics.append(PhaseMetric(
+            name="Speaker Labeling",
+            duration_s=time.monotonic() - t0,
+            input_tokens=speaker_usage.input_tokens,
+            output_tokens=speaker_usage.output_tokens,
+            items=len(speakers_seen),
+        ))
 
     # ── Phase 2: AI passes (optional) ────────────────────────────
     if cleanup or enrich:
@@ -210,6 +238,7 @@ def run_pipeline(
     cleaned_segments = None
 
     if cleanup and llm is not None:
+        t0 = time.monotonic()
         console.print("  [bold]Pass 2a:[/] Cleaning transcript...")
         from podbook.ai.cleanup import cleanup_transcript
 
@@ -219,6 +248,13 @@ def run_pipeline(
             f"  [green]✓[/] Cleanup complete "
             f"({usage.input_tokens:,} in / {usage.output_tokens:,} out)"
         )
+        metrics.append(PhaseMetric(
+            name="Cleanup",
+            duration_s=time.monotonic() - t0,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            items=len(cleaned_segments),
+        ))
         if max_tokens and token_spent >= max_tokens:
             console.print("[yellow]  Token budget reached, stopping AI passes[/]")
 
@@ -230,6 +266,7 @@ def run_pipeline(
             if cleaned_segments:
                 source_transcript = transcript.model_copy(update={"segments": cleaned_segments})
 
+            t0 = time.monotonic()
             console.print("  [bold]Pass 2b:[/] Generating chapters...")
             from podbook.ai.summarize import generate_chapters
 
@@ -239,11 +276,19 @@ def run_pipeline(
                 f"  [green]✓[/] {len(chapters)} chapters "
                 f"({usage.input_tokens:,} in / {usage.output_tokens:,} out)"
             )
+            metrics.append(PhaseMetric(
+                name="Chapters",
+                duration_s=time.monotonic() - t0,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                items=len(chapters),
+            ))
 
             hit_cap = max_tokens and token_spent >= max_tokens
 
             console.print("  [bold]Pass 2c:[/] Key takeaways...")
             if not hit_cap:
+                t0 = time.monotonic()
                 from podbook.ai.summarize import generate_takeaways
 
                 takeaways, usage = generate_takeaways(source_transcript, llm)
@@ -252,10 +297,18 @@ def run_pipeline(
                     f"  [green]✓[/] {len(takeaways)} takeaways "
                     f"({usage.input_tokens:,} in / {usage.output_tokens:,} out)"
                 )
+                metrics.append(PhaseMetric(
+                    name="Takeaways",
+                    duration_s=time.monotonic() - t0,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    items=len(takeaways),
+                ))
                 hit_cap = max_tokens and token_spent >= max_tokens
 
             console.print("  [bold]Pass 2d:[/] Final summary...")
             if not hit_cap:
+                t0 = time.monotonic()
                 from podbook.ai.summarize import generate_summary
 
                 summary, usage = generate_summary(source_transcript, llm)
@@ -264,6 +317,13 @@ def run_pipeline(
                     f"  [green]✓[/] Summary "
                     f"({usage.input_tokens:,} in / {usage.output_tokens:,} out)"
                 )
+                metrics.append(PhaseMetric(
+                    name="Summary",
+                    duration_s=time.monotonic() - t0,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    items=1,
+                ))
                 hit_cap = max_tokens and token_spent >= max_tokens
 
         if token_spent > 0:
@@ -275,6 +335,7 @@ def run_pipeline(
     console.print("[dim]──────────────────────────────────────────[/]")
     console.print("[bold]Phase 3:[/] Generating markdown...")
 
+    t0 = time.monotonic()
     from podbook.ebook.markdown import generate_markdown
 
     slug = _slugify(transcript.source_title or "transcript")
@@ -293,11 +354,13 @@ def run_pipeline(
     md_path = output_dir / f"{slug}.md"
     md_path.write_text(md_text)
     console.print(f"  [green]✓[/] Markdown written to {md_path}")
+    metrics.append(PhaseMetric(name="Markdown", duration_s=time.monotonic() - t0, items=1))
 
     # ── Phase 4: Generate EPUB ───────────────────────────────────
     console.print("[dim]──────────────────────────────────────────[/]")
     console.print("[bold]Phase 4:[/] Generating EPUB...")
 
+    t0 = time.monotonic()
     from podbook.ebook.epub import generate_epub
     from podbook.models import EbookConfig
 
@@ -309,12 +372,16 @@ def run_pipeline(
     epub_path = output_dir / f"{slug}.epub"
     generate_epub(md_text, epub_path, epub_config)
     console.print(f"  [green]✓[/] EPUB written to {epub_path}")
+    metrics.append(PhaseMetric(name="EPUB Generation", duration_s=time.monotonic() - t0, items=1))
 
     # ── Done ─────────────────────────────────────────────────────
     console.print("[dim]──────────────────────────────────────────[/]")
     console.print(f"[bold green]Done![/] EPUB: {epub_path}")
     if token_spent > 0:
         console.print(f"  Total LLM tokens: {token_spent:,}")
+
+    # Print phase metrics
+    _print_phase_metrics(metrics, token_spent)
 
     # Log the completed pipeline run
     md_path = output_dir / f"{slug}.md"
@@ -329,7 +396,7 @@ def run_pipeline(
         content_segment_count=len(transcript.segments),
         cleanup=cleanup or False,
         enrich=enrich or False,
-        glossary=glossary or False,
+        glossary=False,
         speakers=label_speakers or cleanup or False,
         provider=provider or "",
         model=(llm.model if llm else model) or "",
@@ -337,6 +404,7 @@ def run_pipeline(
         status="success",
         output_epub=str(epub_path),
         output_md=str(md_path),
+        phase_metrics=[m.__dict__ for m in metrics],
     )
 
     return epub_path
@@ -578,18 +646,16 @@ def _extract_transcript(
     if source_type == SourceType.YOUTUBE:
         from podbook.sources.youtube import download_audio, extract_youtube
 
-        transcript = extract_youtube(source, source_dir)
+        transcript = extract_youtube(source, source_dir, subs=False)
 
-        if not transcript.segments or force_transcribe:
-            console.print("  No subtitles found, downloading audio for transcription...")
-            # Check audio cache
-            audio_files = list(source_dir.glob("*.wav")) + list(source_dir.glob("*.16k.wav"))
-            if audio_files and not force_transcribe:
-                audio_path = audio_files[0]
-                console.print("  [dim](using cached audio)[/]")
-            else:
-                audio_path = download_audio(source, source_dir)
-            transcript = _transcribe_audio(audio_path, transcript)
+        console.print("  Downloading audio for transcription...")
+        audio_files = list(source_dir.glob("*.wav")) + list(source_dir.glob("*.16k.wav"))
+        if audio_files and not force_transcribe:
+            audio_path = audio_files[0]
+            console.print("  [dim](using cached audio)[/]")
+        else:
+            audio_path = download_audio(source, source_dir)
+        transcript = _transcribe_audio(audio_path, transcript)
 
     elif source_type == SourceType.PODCAST_PAGE:
         from podbook.sources.webpage import extract_webpage
@@ -680,6 +746,33 @@ def _get_provider(provider: str, model: str | None):
 # ═══════════════════════════════════════════════════════════════════
 # Utilities
 # ═══════════════════════════════════════════════════════════════════
+
+def _print_phase_metrics(metrics: list[PhaseMetric], total_tokens: int) -> None:
+    """Print a Rich table of per-phase timing and token metrics."""
+    table = Table(title="Pipeline Metrics")
+    table.add_column("Phase", style="bold")
+    table.add_column("Duration")
+    table.add_column("Tokens In")
+    table.add_column("Tokens Out")
+    table.add_column("Items")
+
+    total_duration = 0.0
+    for m in metrics:
+        total_duration += m.duration_s
+        tok_in = f"{m.input_tokens:,}" if m.input_tokens else "-"
+        tok_out = f"{m.output_tokens:,}" if m.output_tokens else "-"
+        items = str(m.items) if m.items else "-"
+        table.add_row(m.name, _format_duration(m.duration_s), tok_in, tok_out, items)
+
+    table.add_row(
+        "[bold]Total[/]",
+        _format_duration(total_duration),
+        "",
+        f"[bold]{total_tokens:,}[/]" if total_tokens else "-",
+        "",
+    )
+    console.print(table)
+
 
 def _total_duration(transcript: Transcript) -> float:
     if transcript.duration:

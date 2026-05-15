@@ -66,6 +66,7 @@ def log_pipeline_run(
     status: str,
     output_epub: str,
     output_md: str,
+    phase_metrics: list[dict] | None = None,
     error: str = "",
 ) -> None:
     """Log a pipeline run to output/runs.jsonl."""
@@ -87,5 +88,6 @@ def log_pipeline_run(
         "status": status,
         "output_epub": output_epub,
         "output_md": output_md,
+        "phase_metrics": phase_metrics or [],
         "error": error[:500] if error else "",
     })
