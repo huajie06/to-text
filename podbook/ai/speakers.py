@@ -355,26 +355,34 @@ def expand_labels(
 
 
 def _parse_speaker_ids(segments: list[Segment]) -> set[str]:
-    """Extract unique individual speaker IDs from segments, handling combined labels."""
+    """Extract unique individual speaker IDs from segments, handling combined labels.
+
+    Simple label:  SPEAKER_00             → {SPEAKER_00}
+    Combined:      SPEAKER_00_SPEAKER_01  → {SPEAKER_00, SPEAKER_01}
+    """
+    import re
     seen: set[str] = set()
     for seg in segments:
         if not seg.speaker:
             continue
-        for part in seg.speaker.split("_"):
-            if part.startswith("SPEAKER"):
-                seen.add(part)
+        # Split on _SPEAKER (rather than _) so the next part starts with SPEAKER
+        parts = re.split(r"_(?=SPEAKER)", seg.speaker)
+        for p in parts:
+            if p:
+                seen.add(p)
     return seen
 
 
 def _resolve_speaker_label(label: str | None, name_map: dict[str, str]) -> str | None:
     """Map a speaker label through name_map, handling combined labels.
 
-    SPEAKER_00          → Joe Rogan
-    SPEAKER_00_SPEAKER_01 → Joe_Rogan_Theo_Von
+    SPEAKER_00                   → Joe Rogan
+    SPEAKER_00_SPEAKER_01        → Joe_Rogan_Theo_Von
     """
+    import re
     if not label:
         return label
-    parts = label.split("_")
+    parts = re.split(r"_(?=SPEAKER)", label)
     mapped = [name_map.get(p, p) for p in parts]
     return "_".join(mapped)
 
@@ -403,11 +411,12 @@ def map_speaker_ids(
     speaker_ids = sorted(all_ids)
 
     # Pick longest utterance per individual speaker ID
+    import re
     longest: dict[str, str] = {}
     for seg in segments:
         if not seg.speaker:
             continue
-        for part in seg.speaker.split("_"):
+        for part in re.split(r"_(?=SPEAKER)", seg.speaker):
             if part in all_ids:
                 if len(seg.text) > len(longest.get(part, "")):
                     longest[part] = seg.text
