@@ -231,7 +231,7 @@ def stats(
 
 
 def _show_run_stats(output_dir: Path, limit: int) -> None:
-    """Display recent pipeline runs, grouped by source."""
+    """Display recent pipeline runs, grouped by source with full phase tables."""
     log_file = output_dir / "runs.jsonl"
     if not log_file.exists():
         console.print("[yellow]No pipeline runs found (output/runs.jsonl).[/]")
@@ -242,70 +242,71 @@ def _show_run_stats(output_dir: Path, limit: int) -> None:
         console.print("[yellow]No pipeline runs found.[/]")
         return
 
-    # Group by source, reverse so most recent sources come first
+    # Group by source, reverse so most recent source first
     groups: dict[str, list[dict]] = {}
     for entry in lines:
         groups.setdefault(entry.get("source", ""), []).append(entry)
 
-    # Sort sources by most recent timestamp, then limit total sources
-    total_shown = 0
+    sources_shown = 0
     for source in sorted(groups, key=lambda s: groups[s][-1].get("timestamp", ""), reverse=True):
-        if total_shown >= limit:
+        if sources_shown >= limit:
             break
         entries = groups[source]
 
-        # Print source header
-        title = entries[-1].get("source_title", "")[:60]
-        header = f"Source: {source[:90]}"
+        title = entries[-1].get("source_title", "") or ""
+        label = source[:90]
         if title:
-            header += f"  —  {title}"
-        console.print(f"\n[bold]{header}[/]")
-        console.print(f"  [dim]{len(entries)} run(s)[/]")
-
-        table = Table(show_header=True, box=None, padding=(0, 2))
-        table.add_column("#", style="dim", width=3)
-        table.add_column("Timestamp", width=10)
-        table.add_column("Duration", justify="right", width=7)
-        table.add_column("Tokens", justify="right", width=8)
-        table.add_column("Status", width=4)
-        table.add_column("Phases")
+            label += f"  —  {title[:60]}"
+        console.print(f"\n[bold underline]Source:[/] {label}")
 
         for entry in entries:
-            # Timestamp: strip date from ISO e.g. "2026-05-16T15:30" → "05-16 15:30"
-            ts = (entry.get("timestamp") or "")[:16].replace("T", " ")
-            if ts:
-                ts = ts[5:]  # strip year
-
-            total_dur = sum(pm.get("duration_s", 0) for pm in entry.get("phase_metrics", []))
-            dur_str = _format_dur(total_dur)
-            tokens = entry.get("total_tokens", 0)
+            ts = entry.get("timestamp", "")[:16].replace("T", " ")
             status = entry.get("status", "")
-            status_display = {"success": "✓", "error": "✗"}.get(status, status[:4])
+            status_disp = "[green]✓ Success[/]" if status == "success" else f"[red]✗ {status}[/]"
+            provider = entry.get("provider", "")
+            console.print(f"\n  [bold]Run[/] @ {ts}  {status_disp}  [dim]{provider}[/]")
 
-            # Build phase summary
-            phase_parts = []
-            for pm in entry.get("phase_metrics", []):
-                name = pm.get("name", "")
-                p_dur = pm.get("duration_s", 0)
-                p_in = pm.get("input_tokens", 0)
-                p_out = pm.get("output_tokens", 0)
-                if p_dur < 1 and not p_in:
-                    continue
-                part = name
-                if p_dur >= 1:
-                    part += f" {_format_dur(p_dur)}"
-                if p_in or p_out:
-                    part += f" ({p_in}→{p_out})"
-                phase_parts.append(part)
-            phases = "  ".join(phase_parts)
+            _print_run_phases(entry)
 
-            table.add_row("", ts, dur_str, f"{tokens:,}", status_display, phases)
+        sources_shown += 1
 
-        console.print(table)
-        total_shown += 1
-
-    if not total_shown:
+    if not sources_shown:
         console.print("[yellow]No pipeline runs found.[/]")
+
+
+def _print_run_phases(entry: dict) -> None:
+    """Print a phase metrics table for a single pipeline run."""
+    total_tokens = entry.get("total_tokens", 0)
+    phases = entry.get("phase_metrics", [])
+
+    if not phases:
+        console.print("  [dim]No phase data[/]")
+        return
+
+    table = Table(box=None, padding=(0, 2))
+    table.add_column("Phase", style="bold")
+    table.add_column("Duration")
+    table.add_column("Tokens In")
+    table.add_column("Tokens Out")
+    table.add_column("Items")
+
+    total_duration = 0.0
+    for pm in phases:
+        dur = pm.get("duration_s", 0)
+        total_duration += dur
+        tok_in = f"{pm.get('input_tokens', 0):,}" if pm.get("input_tokens") else "-"
+        tok_out = f"{pm.get('output_tokens', 0):,}" if pm.get("output_tokens") else "-"
+        items = str(pm.get("items", "")) if pm.get("items") else "-"
+        table.add_row(pm.get("name", ""), _format_dur(dur), tok_in, tok_out, items)
+
+    table.add_row(
+        "[bold]Total[/]",
+        _format_dur(total_duration),
+        "",
+        f"[bold]{total_tokens:,}[/]" if total_tokens else "-",
+        "",
+    )
+    console.print(table)
 
 
 def _show_llm_calls(output_dir: Path, limit: int) -> None:
