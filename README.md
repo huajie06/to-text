@@ -164,6 +164,15 @@ podbook transcript <url> --output ./my-transcript.json
 podbook epub ./my-transcript.json
 ```
 
+### Run history and stats
+
+```bash
+podbook stats                       # last 10 pipeline runs (duration, tokens, passes)
+podbook stats -n 20                 # last 20 runs
+podbook stats --calls               # last 10 LLM calls with per-call token/latency breakdown
+podbook stats -n 5 --calls          # last 5 LLM calls
+```
+
 ### Cache management
 
 ```bash
