@@ -757,7 +757,7 @@ def _print_phase_metrics(metrics: list[PhaseMetric], total_tokens: int) -> None:
     table.add_column("Duration")
     table.add_column("Tokens In")
     table.add_column("Tokens Out")
-    table.add_column("Items")
+    table.add_column("Items (segs/chunks)")
 
     total_duration = 0.0
     for m in metrics:
