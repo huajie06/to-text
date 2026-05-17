@@ -16,8 +16,12 @@ class OpenAIProvider(LLMProvider):
         api_key: str | None = None,
         base_url: str | None = None,
         extra_body: dict | None = None,
+        *,
+        name: str | None = None,
     ):
         self.model = model
+        if name is not None:
+            self.name = name
         self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self.base_url = base_url
         self.extra_body = extra_body

@@ -231,54 +231,81 @@ def stats(
 
 
 def _show_run_stats(output_dir: Path, limit: int) -> None:
-    """Display recent pipeline runs from runs.jsonl."""
+    """Display recent pipeline runs, grouped by source."""
     log_file = output_dir / "runs.jsonl"
     if not log_file.exists():
         console.print("[yellow]No pipeline runs found (output/runs.jsonl).[/]")
         return
 
     lines = [json.loads(l) for l in log_file.read_text().splitlines() if l.strip()]
-    entries = lines[-limit:]
-
-    if not entries:
+    if not lines:
         console.print("[yellow]No pipeline runs found.[/]")
         return
 
-    table = Table(title=f"Pipeline Runs (last {len(entries)})")
-    table.add_column("#", style="dim")
-    table.add_column("Title")
-    table.add_column("Duration", justify="right")
-    table.add_column("Tokens", justify="right")
-    table.add_column("Segs", justify="right")
-    table.add_column("Cleanup")
-    table.add_column("Enrich")
-    table.add_column("Spkrs")
-    table.add_column("Provider")
-    table.add_column("Status")
+    # Group by source, reverse so most recent sources come first
+    groups: dict[str, list[dict]] = {}
+    for entry in lines:
+        groups.setdefault(entry.get("source", ""), []).append(entry)
 
-    for i, entry in enumerate(reversed(entries), 1):
-        total_dur = 0
-        for pm in entry.get("phase_metrics", []):
-            total_dur += pm.get("duration_s", 0)
-        dur_str = _format_dur(total_dur)
-        tokens = entry.get("total_tokens", 0)
-        segs = entry.get("content_segment_count", entry.get("segment_count", ""))
+    # Sort sources by most recent timestamp, then limit total sources
+    total_shown = 0
+    for source in sorted(groups, key=lambda s: groups[s][-1].get("timestamp", ""), reverse=True):
+        if total_shown >= limit:
+            break
+        entries = groups[source]
 
-        cleanup_mark = "[green]✓[/]" if entry.get("cleanup") else ""
-        enrich_mark = "[green]✓[/]" if entry.get("enrich") else ""
-        spkrs_mark = "[green]✓[/]" if entry.get("speakers") else ""
-        status = entry.get("status", "")
-        status_display = {"success": "[green]✓[/]", "error": "[red]✗[/]"}.get(status, status)
-        title = entry.get("source_title", "")[:50]
-        provider = entry.get("provider", "")
+        # Print source header
+        title = entries[-1].get("source_title", "")[:60]
+        header = f"Source: {source[:90]}"
+        if title:
+            header += f"  —  {title}"
+        console.print(f"\n[bold]{header}[/]")
+        console.print(f"  [dim]{len(entries)} run(s)[/]")
 
-        table.add_row(
-            str(i), title, dur_str, f"{tokens:,}", str(segs),
-            cleanup_mark, enrich_mark, spkrs_mark,
-            provider, status_display,
-        )
+        table = Table(show_header=True, box=None, padding=(0, 2))
+        table.add_column("#", style="dim", width=3)
+        table.add_column("Timestamp", width=10)
+        table.add_column("Duration", justify="right", width=7)
+        table.add_column("Tokens", justify="right", width=8)
+        table.add_column("Status", width=4)
+        table.add_column("Phases")
 
-    console.print(table)
+        for entry in entries:
+            # Timestamp: strip date from ISO e.g. "2026-05-16T15:30" → "05-16 15:30"
+            ts = (entry.get("timestamp") or "")[:16].replace("T", " ")
+            if ts:
+                ts = ts[5:]  # strip year
+
+            total_dur = sum(pm.get("duration_s", 0) for pm in entry.get("phase_metrics", []))
+            dur_str = _format_dur(total_dur)
+            tokens = entry.get("total_tokens", 0)
+            status = entry.get("status", "")
+            status_display = {"success": "✓", "error": "✗"}.get(status, status[:4])
+
+            # Build phase summary
+            phase_parts = []
+            for pm in entry.get("phase_metrics", []):
+                name = pm.get("name", "")
+                p_dur = pm.get("duration_s", 0)
+                p_in = pm.get("input_tokens", 0)
+                p_out = pm.get("output_tokens", 0)
+                if p_dur < 1 and not p_in:
+                    continue
+                part = name
+                if p_dur >= 1:
+                    part += f" {_format_dur(p_dur)}"
+                if p_in or p_out:
+                    part += f" ({p_in}→{p_out})"
+                phase_parts.append(part)
+            phases = "  ".join(phase_parts)
+
+            table.add_row("", ts, dur_str, f"{tokens:,}", status_display, phases)
+
+        console.print(table)
+        total_shown += 1
+
+    if not total_shown:
+        console.print("[yellow]No pipeline runs found.[/]")
 
 
 def _show_llm_calls(output_dir: Path, limit: int) -> None:

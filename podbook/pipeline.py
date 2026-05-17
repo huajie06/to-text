@@ -740,6 +740,7 @@ def _get_provider(provider: str, model: str | None):
             model=model or os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
             api_key=os.environ.get("DEEPSEEK_API_KEY"),
             base_url="https://api.deepseek.com",
+            name="deepseek",
         )
 
     raise ValueError(f"Unknown provider: {provider!r}. Use: ollama, openai, claude, deepseek")
