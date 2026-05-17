@@ -87,6 +87,13 @@ def build(
             help="Download audio and run pyannote diarization even when subtitles are available. Requires HUGGINGFACE_TOKEN.",
         ),
     ] = False,
+    no_speakers: Annotated[
+        bool,
+        typer.Option(
+            "--no-speakers",
+            help="Skip speaker labeling entirely (single-speaker talk or speech).",
+        ),
+    ] = False,
 ) -> None:
     """Build an ebook from a podcast URL or local audio/video file."""
     from podbook.pipeline import run_pipeline
@@ -110,6 +117,7 @@ def build(
         fraction=fraction,
         label_speakers=speakers,
         force_diarize=force_diarize,
+        no_speakers=no_speakers,
     )
 
 
@@ -234,16 +242,12 @@ def cache_list(
                     file_type = "Audio"
                 elif file_type in ("JSON3", "SRT", "VTT"):
                     file_type = "Subtitles"
+                elif file_type == "MD":
+                    file_type = "Markdown"
+                elif file_type == "EPUB":
+                    file_type = "EPUB"
                 table.add_row(source_label, file_type, f.name, _human_size(f.stat().st_size))
                 any_found = True
-
-    for f in sorted(output_dir.glob("*.md")):
-        table.add_row("—", "Markdown", f.name, _human_size(f.stat().st_size))
-        any_found = True
-
-    for f in sorted(output_dir.glob("*.epub")):
-        table.add_row("—", "EPUB", f.name, _human_size(f.stat().st_size))
-        any_found = True
 
     if any_found:
         console.print(table)

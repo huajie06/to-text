@@ -62,13 +62,13 @@ In `speakers.py`, `map_speaker_ids()` handles combined labels:
 ## Output layout
 
 ```
-output/{hash[:8]}-{slug}/          # per-source cache
+output/{hash[:8]}-{slug}/          # per-source directory
 ├── transcript.json                # raw whisper transcript (no speakers)
 ├── {title}.wav                    # downloaded audio
 ├── {title}.16k.wav                # resampled for whisper
 ├── diarization.json               # pyannote output (cached)
-output/{slug}-{provider}.md        # markdown with provider in filename
-output/{slug}-{provider}.epub
+├── {slug}-{provider}.md           # markdown with provider in filename
+├── {slug}-{provider}.epub         # EPUB output
 output/runs.jsonl                  # pipeline run log
 output/llm_calls.jsonl             # LLM call log
 ```

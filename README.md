@@ -47,8 +47,8 @@ flowchart TD
 
     O --> SP{speaker labeling?}
     SP -->|--force-diarize| DZ[pyannote diarization]
-    SP -->|--speakers or --cleanup| SL[LLM-only labeling]
-    SP -->|no| P
+    SP -->|--speakers / --cleanup| SL[LLM-only labeling]
+    SP -->|--no-speakers / none| P
 
     DZ --> AS[assign_speakers any-overlap merge]
     AS --> MP[map_speaker_ids LLM → names]
@@ -111,6 +111,10 @@ podbook build --cleanup --enrich --provider ollama --model gemma4:e2b <url>
 # Label speakers in the transcript (auto-enabled with --cleanup)
 podbook build --speakers <url>
 podbook build --speakers --cleanup --provider ollama --model gemma4:e2b <url>
+
+# Skip speaker labeling for single-speaker talks (saves pyannote + LLM cost)
+podbook build --no-speakers <url>
+podbook build --cleanup --no-speakers <url>
 
 # When --cleanup is used, a *-raw.md is saved alongside the cleaned *.md
 # so you can compare pre- and post-cleanup output.

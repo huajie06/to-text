@@ -41,6 +41,7 @@ def run_pipeline(
     fraction: float | None = None,
     label_speakers: bool = False,
     force_diarize: bool = False,
+    no_speakers: bool = False,
 ) -> Path | None:
     """Run the full PodBook pipeline.
 
@@ -58,7 +59,7 @@ def run_pipeline(
         _inspect_cache(output_dir, cache_key, source, source_type)
         console.print()
         if cleanup or enrich:
-            _show_cost_estimate(source, source_type, cleanup, enrich, label_speakers or cleanup, provider, model, max_tokens)
+            _show_cost_estimate(source, source_type, cleanup, enrich, (label_speakers or cleanup) and not no_speakers, provider, model, max_tokens)
         else:
             console.print("[dim]No AI passes requested. Use --cleanup or --enrich for LLM estimates.[/]")
         console.print()
@@ -149,7 +150,11 @@ def run_pipeline(
     # ── Phase 1.5: Speaker labeling ────────────────────────────────
     llm = None
     token_spent = 0
-    speaker_labeling_enabled = label_speakers or cleanup
+    speaker_labeling_enabled = (label_speakers or cleanup) and not no_speakers
+
+    if no_speakers:
+        console.print("[dim]──────────────────────────────────────────[/]")
+        console.print("[bold]Phase 1.5:[/] Speaker labeling [dim]skipped (--no-speakers)[/]")
 
     if speaker_labeling_enabled:
         t0 = time.monotonic()
@@ -351,7 +356,7 @@ def run_pipeline(
         key_takeaways=takeaways,
         final_summary=summary,
     )
-    md_path = output_dir / f"{slug}.md"
+    md_path = source_dir / f"{slug}.md"
     md_path.write_text(md_text)
     console.print(f"  [green]✓[/] Markdown written to {md_path}")
     metrics.append(PhaseMetric(name="Markdown", duration_s=time.monotonic() - t0, items=1))
@@ -369,7 +374,7 @@ def run_pipeline(
         author=transcript.channel or "PodBook",
         language=transcript.language or "en",
     )
-    epub_path = output_dir / f"{slug}.epub"
+    epub_path = source_dir / f"{slug}.epub"
     generate_epub(md_text, epub_path, epub_config)
     console.print(f"  [green]✓[/] EPUB written to {epub_path}")
     metrics.append(PhaseMetric(name="EPUB Generation", duration_s=time.monotonic() - t0, items=1))
@@ -384,7 +389,6 @@ def run_pipeline(
     _print_phase_metrics(metrics, token_spent)
 
     # Log the completed pipeline run
-    md_path = output_dir / f"{slug}.md"
     from podbook.logging import log_pipeline_run
     log_pipeline_run(
         source=source,
@@ -397,7 +401,7 @@ def run_pipeline(
         cleanup=cleanup or False,
         enrich=enrich or False,
         glossary=False,
-        speakers=label_speakers or cleanup or False,
+        speakers=no_speakers is False and (label_speakers or cleanup) or False,
         provider=provider or "",
         model=(llm.model if llm else model) or "",
         total_tokens=token_spent,
@@ -462,13 +466,11 @@ def _inspect_cache(
     else:
         table.add_row("Subtitles", "[dim]unavailable[/]", "—")
 
-    # Markdown / EPUB (at output root)
-    slug = sd.name.split("-", 1)[-1] if "-" in sd.name else ""
+    # Markdown / EPUB (inside source directory)
     for label, ext in [("Markdown", "md"), ("EPUB", "epub")]:
-        files = list(output_dir.glob(f"*.{ext}"))
-        matches = [f for f in files if slug and slug in _slugify(f.stem)]
-        if matches:
-            table.add_row(label, "[green]cached[/]", str(matches[0])[:60])
+        files = list(sd.glob(f"*.{ext}"))
+        if files:
+            table.add_row(label, "[green]cached[/]", str(files[0])[:60])
         else:
             table.add_row(label, "[dim]not found[/]", "—")
 
