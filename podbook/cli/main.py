@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Annotated
 
@@ -10,6 +11,7 @@ load_dotenv()
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from podbook.models import SourceType
 
@@ -204,6 +206,129 @@ def epub(
     console.print(f"[green]✓[/] EPUB written to {out_path}")
 
 
+# ── Stats command ─────────────────────────────────────────────────
+
+@app.command()
+def stats(
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-n", help="Number of recent runs to show."),
+    ] = 10,
+    calls: Annotated[
+        bool,
+        typer.Option("--calls", help="Show LLM call log instead of run summary."),
+    ] = False,
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output-dir", "-d", help="Output directory to inspect."),
+    ] = Path("output"),
+) -> None:
+    """Show pipeline run history and LLM call stats."""
+    if calls:
+        _show_llm_calls(output_dir, limit)
+    else:
+        _show_run_stats(output_dir, limit)
+
+
+def _show_run_stats(output_dir: Path, limit: int) -> None:
+    """Display recent pipeline runs from runs.jsonl."""
+    log_file = output_dir / "runs.jsonl"
+    if not log_file.exists():
+        console.print("[yellow]No pipeline runs found (output/runs.jsonl).[/]")
+        return
+
+    lines = [json.loads(l) for l in log_file.read_text().splitlines() if l.strip()]
+    entries = lines[-limit:]
+
+    if not entries:
+        console.print("[yellow]No pipeline runs found.[/]")
+        return
+
+    table = Table(title=f"Pipeline Runs (last {len(entries)})")
+    table.add_column("#", style="dim")
+    table.add_column("Title")
+    table.add_column("Duration", justify="right")
+    table.add_column("Tokens", justify="right")
+    table.add_column("Segs", justify="right")
+    table.add_column("Cleanup")
+    table.add_column("Enrich")
+    table.add_column("Spkrs")
+    table.add_column("Provider")
+    table.add_column("Status")
+
+    for i, entry in enumerate(reversed(entries), 1):
+        total_dur = 0
+        for pm in entry.get("phase_metrics", []):
+            total_dur += pm.get("duration_s", 0)
+        dur_str = _format_dur(total_dur)
+        tokens = entry.get("total_tokens", 0)
+        segs = entry.get("content_segment_count", entry.get("segment_count", ""))
+
+        cleanup_mark = "[green]✓[/]" if entry.get("cleanup") else ""
+        enrich_mark = "[green]✓[/]" if entry.get("enrich") else ""
+        spkrs_mark = "[green]✓[/]" if entry.get("speakers") else ""
+        status = entry.get("status", "")
+        status_display = {"success": "[green]✓[/]", "error": "[red]✗[/]"}.get(status, status)
+        title = entry.get("source_title", "")[:50]
+        provider = entry.get("provider", "")
+
+        table.add_row(
+            str(i), title, dur_str, f"{tokens:,}", str(segs),
+            cleanup_mark, enrich_mark, spkrs_mark,
+            provider, status_display,
+        )
+
+    console.print(table)
+
+
+def _show_llm_calls(output_dir: Path, limit: int) -> None:
+    """Display recent LLM calls from llm_calls.jsonl."""
+    log_file = output_dir / "llm_calls.jsonl"
+    if not log_file.exists():
+        console.print("[yellow]No LLM calls found (output/llm_calls.jsonl).[/]")
+        return
+
+    lines = [json.loads(l) for l in log_file.read_text().splitlines() if l.strip()]
+    entries = lines[-limit:]
+
+    if not entries:
+        console.print("[yellow]No LLM calls found.[/]")
+        return
+
+    total_in = sum(e.get("input_tokens", 0) for e in entries)
+    total_out = sum(e.get("output_tokens", 0) for e in entries)
+
+    table = Table(title=f"LLM Calls (last {len(entries)} — {total_in} in / {total_out} out)")
+    table.add_column("#", style="dim")
+    table.add_column("Purpose")
+    table.add_column("Provider")
+    table.add_column("Tokens In", justify="right")
+    table.add_column("Tokens Out", justify="right")
+    table.add_column("Latency", justify="right")
+
+    for i, entry in enumerate(reversed(entries), 1):
+        purpose = entry.get("purpose", "")
+        provider = entry.get("provider", "")
+        in_tok = entry.get("input_tokens", 0)
+        out_tok = entry.get("output_tokens", 0)
+        lat = entry.get("latency_ms", 0)
+        lat_str = f"{lat / 1000:.1f}s" if lat > 0 else ""
+
+        table.add_row(str(i), purpose, provider, f"{in_tok:,}", f"{out_tok:,}", lat_str)
+
+    console.print(table)
+
+
+def _format_dur(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h}h {m}m"
+    if m > 0:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+
 # ── Cache subcommands ──────────────────────────────────────────────
 
 @cache_app.command("list")
@@ -214,7 +339,6 @@ def cache_list(
     ] = Path("output"),
 ) -> None:
     """List all cached artifacts in the output directory."""
-    from rich.table import Table
 
     source_dirs = sorted(
         [d for d in output_dir.iterdir() if d.is_dir() and "-" in d.name],
