@@ -59,7 +59,7 @@ def run_pipeline(
         _inspect_cache(output_dir, cache_key, source, source_type)
         console.print()
         if cleanup or enrich:
-            _show_cost_estimate(source, source_type, cleanup, enrich, (label_speakers or cleanup) and not no_speakers, provider, model, max_tokens)
+            _show_cost_estimate(source, source_type, cleanup, enrich, label_speakers and not no_speakers, provider, model, max_tokens)
         else:
             console.print("[dim]No AI passes requested. Use --cleanup or --enrich for LLM estimates.[/]")
         console.print()
@@ -150,11 +150,11 @@ def run_pipeline(
     # ── Phase 1.5: Speaker labeling ────────────────────────────────
     llm = None
     token_spent = 0
-    speaker_labeling_enabled = (label_speakers or cleanup) and not no_speakers
+    speaker_labeling_enabled = label_speakers and not no_speakers
 
-    if no_speakers:
+    if no_speakers and label_speakers:
         console.print("[dim]──────────────────────────────────────────[/]")
-        console.print("[bold]Phase 1.5:[/] Speaker labeling [dim]skipped (--no-speakers)[/]")
+        console.print("[bold]Phase 1.5:[/] Speaker labeling [dim]overridden (--no-speakers)[/]")
 
     if speaker_labeling_enabled:
         t0 = time.monotonic()
@@ -401,7 +401,7 @@ def run_pipeline(
         cleanup=cleanup or False,
         enrich=enrich or False,
         glossary=False,
-        speakers=no_speakers is False and (label_speakers or cleanup) or False,
+        speakers=label_speakers and not no_speakers,
         provider=provider or "",
         model=(llm.model if llm else model) or "",
         total_tokens=token_spent,

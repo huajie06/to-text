@@ -77,7 +77,7 @@ def build(
         bool,
         typer.Option(
             "--speakers",
-            help="Label speakers in the transcript (auto-enabled with --cleanup).",
+            help="Label speakers in the transcript (requires extra LLM call).",
         ),
     ] = False,
     force_diarize: Annotated[
@@ -91,7 +91,7 @@ def build(
         bool,
         typer.Option(
             "--no-speakers",
-            help="Skip speaker labeling entirely (single-speaker talk or speech).",
+            help="Override — skip speaker labeling even if --speakers is set.",
         ),
     ] = False,
 ) -> None:

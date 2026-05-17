@@ -27,7 +27,7 @@ Linear pipeline: **source → transcript → normalize+preprocess → AI passes 
 - `Transcript` / `Segment` (pydantic) are immutable — LLM passes produce derivative structures, never mutate originals.
 - YouTube always uses **faster-whisper** for transcription (`subs=False` on `extract_youtube()`). Subtitles are no longer used as a transcript source — only metadata (title, channel, description) is fetched from yt-dlp.
 - Preprocessing runs before any LLM call: classifies segments as CONTENT/AD/SELF_PROMO/META/FILLER, filters to CONTENT only.
-- `--speakers` auto-enabled with `--cleanup`.
+- `--speakers` is opt-in (no longer auto-enabled by `--cleanup`).
 - Speaker labeling has two paths:
   - **LLM-only** (default when HF token unavailable): one LLM call on utterance sample, then heuristic propagation to all segments.
   - **Acoustic** (`--force-diarize`): pyannote.audio produces `(start, end, SPEAKER_XX)` windows, merged into whisper segments via `assign_speakers()` using **any-overlap alignment**. If a segment overlaps both speakers, it gets a combined label (`SPEAKER_00_SPEAKER_01`). A follow-up LLM call maps IDs to real names via `map_speaker_ids()`.

@@ -47,8 +47,8 @@ flowchart TD
 
     O --> SP{speaker labeling?}
     SP -->|--force-diarize| DZ[pyannote diarization]
-    SP -->|--speakers / --cleanup| SL[LLM-only labeling]
-    SP -->|--no-speakers / none| P
+    SP -->|--speakers| SL[LLM-only labeling]
+    SP -->|--no-speakers / default| P
 
     DZ --> AS[assign_speakers any-overlap merge]
     AS --> MP[map_speaker_ids LLM → names]
@@ -108,13 +108,12 @@ podbook build ./episode.mp3
 # Ollama defaults to llama3.2 — override with --model for your local model
 podbook build --cleanup --enrich --provider ollama --model gemma4:e2b <url>
 
-# Label speakers in the transcript (auto-enabled with --cleanup)
+# Label speakers in the transcript (opt-in)
 podbook build --speakers <url>
 podbook build --speakers --cleanup --provider ollama --model gemma4:e2b <url>
 
-# Skip speaker labeling for single-speaker talks (saves pyannote + LLM cost)
-podbook build --no-speakers <url>
-podbook build --cleanup --no-speakers <url>
+# Speaker labeling is opt-in — --cleanup no longer auto-enables it
+podbook build --cleanup <url>  # runs cleanup without speaker labeling
 
 # When --cleanup is used, a *-raw.md is saved alongside the cleaned *.md
 # so you can compare pre- and post-cleanup output.
@@ -204,7 +203,7 @@ Two speaker labeling paths exist, controlled by `--force-diarize`:
 
 | Path | Trigger | Method | Quality |
 |---|---|---|---|
-| LLM-only | `--speakers` or `--cleanup` (default) | One LLM call on utterance sample + heuristic propagation | Good — works on text alone |
+| LLM-only | `--speakers` | One LLM call on utterance sample + heuristic propagation | Good — works on text alone |
 | Acoustic | `--force-diarize` | pyannote.audio + any-overlap merge + LLM name mapping | Better on clean audio, noisy on short interjections |
 
 ### Diarization → transcript merge strategy
